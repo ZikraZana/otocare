@@ -15,14 +15,14 @@ class _KelolaAntrianState extends State<KelolaAntrian> {
       "status": "Diterima",
       "color": Colors.blue,
       "date": "12 Desember 2026 - 16:00 WIB",
-      "code": "KSG",
+      "jenis": "KSG",
     },
     {
       "name": "Nathania Ardelia",
       "status": "Diterima",
       "color": Colors.blue,
       "date": "12 Desember 2026 - 18:00 WIB",
-      "code": "KSG",
+      "jenis": "KSG",
     },
     {
       "name": "Endah Retno Kinanti",
@@ -30,21 +30,21 @@ class _KelolaAntrianState extends State<KelolaAntrian> {
       "color": Colors.amber,
       "textColor": Colors.black,
       "date": "13 Desember 2026 - 08:00 WIB",
-      "code": "KSG",
+      "jenis": "KSG",
     },
     {
       "name": "Budi Santoso",
       "status": "Ditolak",
       "color": Colors.red,
       "date": "14 Desember 2026 - 09:00 WIB",
-      "code": "KSG",
+      "jenis": "KSG",
     },
     {
       "name": "Siti Aminah",
       "status": "Selesai",
       "color": Colors.green,
       "date": "14 Desember 2026 - 10:00 WIB",
-      "code": "KSG",
+      "jenis": "KSG",
     },
   ];
 
@@ -120,7 +120,7 @@ class _KelolaAntrianState extends State<KelolaAntrian> {
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        item['code'],
+                        item['jenis'],
                         style: const TextStyle(
                           color: Colors.white70,
                           fontSize: 14,
