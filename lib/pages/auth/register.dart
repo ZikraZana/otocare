@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:otocare/pages/auth/login.dart';
 
 class RegisterPage extends StatefulWidget {
   const RegisterPage({super.key});
@@ -9,8 +8,8 @@ class RegisterPage extends StatefulWidget {
 }
 
 class _RegisterPageState extends State<RegisterPage> {
+  
   bool isAgreed = false;
-
   final TextEditingController _namaLengkapController = TextEditingController();
   final TextEditingController _nomorHandphoneController =
       TextEditingController();
@@ -23,7 +22,6 @@ class _RegisterPageState extends State<RegisterPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF2B2B2B),
-
       body: Center(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24.0),
@@ -34,7 +32,11 @@ class _RegisterPageState extends State<RegisterPage> {
               Center(
                 child: Column(
                   children: [
-                    Icon(Icons.two_wheeler, size: 80, color: Colors.white),
+                    const Icon(
+                      Icons.two_wheeler,
+                      size: 80,
+                      color: Colors.white,
+                    ),
                     const SizedBox(height: 10),
                     const Text(
                       "OtoCare",
@@ -47,7 +49,6 @@ class _RegisterPageState extends State<RegisterPage> {
                   ],
                 ),
               ),
-
               const SizedBox(height: 50),
               const Text(
                 "Daftarkan Dirimu!",
@@ -57,7 +58,6 @@ class _RegisterPageState extends State<RegisterPage> {
                   fontWeight: FontWeight.bold,
                 ),
               ),
-
               const Text(
                 "Masukkan datamu disini",
                 style: TextStyle(
@@ -68,99 +68,28 @@ class _RegisterPageState extends State<RegisterPage> {
               ),
 
               const SizedBox(height: 40),
-              TextField(
-                controller: _namaLengkapController,
-                decoration: InputDecoration(
-                  filled: true,
-                  fillColor: Colors.white,
-                  hintText: "Nama Lengkap",
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 10,
-                  ),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                    borderSide: BorderSide.none,
-                  ),
-                ),
+              _buildInput(_namaLengkapController, "Nama Lengkap"),
+
+              const SizedBox(height: 10),
+              _buildInput(
+                _nomorHandphoneController,
+                "Nomor Handphone (Whatsapp)",
               ),
 
               const SizedBox(height: 10),
-              TextField(
-                controller: _nomorHandphoneController,
-                decoration: InputDecoration(
-                  filled: true,
-                  fillColor: Colors.white,
-                  hintText: "Nomor Handphone (Whatsapp)",
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 10,
-                  ),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                    borderSide: BorderSide.none,
-                  ),
-                ),
-              ),
+              _buildInput(_emailController, "Email"),
 
               const SizedBox(height: 10),
-              TextField(
-                controller: _emailController,
-                decoration: InputDecoration(
-                  filled: true,
-                  fillColor: Colors.white,
-                  hintText: "Email",
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 10,
-                  ),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                    borderSide: BorderSide.none,
-                  ),
-                ),
-              ),
-
+              _buildInput(_passwordController, "Password Baru", obscure: true),
+              
               const SizedBox(height: 10),
-              TextField(
-                controller: _passwordController,
-                obscureText: true,
-                decoration: InputDecoration(
-                  filled: true,
-                  fillColor: Colors.white,
-                  hintText: "Password Baru",
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 10,
-                  ),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                    borderSide: BorderSide.none,
-                  ),
-                ),
-              ),
-
-              const SizedBox(height: 10),
-              TextField(
-                controller: _konfirmasiPasswordController,
-                obscureText: true,
-                decoration: InputDecoration(
-                  filled: true,
-                  fillColor: Colors.white,
-                  hintText: "Konfirmasi Password",
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 10,
-                  ),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                    borderSide: BorderSide.none,
-                  ),
-                ),
+              _buildInput(
+                _konfirmasiPasswordController,
+                "Konfirmasi Password",
+                obscure: true,
               ),
 
               const SizedBox(height: 20),
-
               Row(
                 children: [
                   SizedBox(
@@ -168,14 +97,11 @@ class _RegisterPageState extends State<RegisterPage> {
                     width: 24,
                     child: Checkbox(
                       value: isAgreed,
-                      activeColor: Color(0xFFD72638),
+                      activeColor: const Color(0xFFD72638),
                       checkColor: Colors.black,
                       side: const BorderSide(color: Colors.white, width: 2),
-                      onChanged: (bool? value) {
-                        setState(() {
-                          isAgreed = value ?? false;
-                        });
-                      },
+                      onChanged: (bool? value) =>
+                          setState(() => isAgreed = value ?? false),
                     ),
                   ),
                   const SizedBox(width: 10),
@@ -185,14 +111,13 @@ class _RegisterPageState extends State<RegisterPage> {
                   ),
                 ],
               ),
-
               const SizedBox(height: 5),
               SizedBox(
                 width: double.infinity,
                 height: 50,
                 child: ElevatedButton(
                   onPressed: () {
-                    print("Tombol dipencet bang");
+                    print("Tombol Daftar dipencet");
                   },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFFD72638),
@@ -203,17 +128,11 @@ class _RegisterPageState extends State<RegisterPage> {
                   ),
                   child: const Text(
                     "Daftar Sekarang",
-                    style: TextStyle(
-                      fontSize: 16,
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                    ),
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                   ),
                 ),
               ),
-
               const SizedBox(height: 10),
-
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
@@ -222,14 +141,7 @@ class _RegisterPageState extends State<RegisterPage> {
                     style: TextStyle(color: Colors.white),
                   ),
                   GestureDetector(
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => const LoginPage(),
-                        ),
-                      );
-                    },
+                    onTap: () => Navigator.pop(context),
                     child: const Text(
                       "Masuk Disini!",
                       style: TextStyle(
@@ -243,6 +155,31 @@ class _RegisterPageState extends State<RegisterPage> {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  // Template Input
+  Widget _buildInput(
+    TextEditingController controller,
+    String hint, {
+    bool obscure = false,
+  }) {
+    return TextField(
+      controller: controller,
+      obscureText: obscure,
+      decoration: InputDecoration(
+        filled: true,
+        fillColor: Colors.white,
+        hintText: hint,
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 20,
+          vertical: 10,
+        ),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide.none,
         ),
       ),
     );
