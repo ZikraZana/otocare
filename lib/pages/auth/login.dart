@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:otocare/pages/auth/register.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -124,7 +125,7 @@ class _LoginPageState extends State<LoginPage> {
                 ),
               ),
 
-              const SizedBox(height: 20),
+              const SizedBox(height: 10),
 
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -135,7 +136,12 @@ class _LoginPageState extends State<LoginPage> {
                   ),
                   GestureDetector(
                     onTap: () {
-                      print("Pindah ke Halaman Daftar");
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => const RegisterPage(),
+                        ),
+                      );
                     },
                     child: const Text(
                       "Daftar Sekarang!",
