@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
 
 class RiwayatAntrianPage extends StatefulWidget {
+  const RiwayatAntrianPage({super.key});
   @override
-  _RiwayatAntrianPageState createState() => _RiwayatAntrianPageState();
+  RiwayatAntrianPageState createState() => RiwayatAntrianPageState();
 }
 
-class _RiwayatAntrianPageState extends State<RiwayatAntrianPage> {
+class RiwayatAntrianPageState extends State<RiwayatAntrianPage> {
   int selectedTab = 0; 
 
   @override
