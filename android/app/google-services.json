@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "288737141702",
+    "project_id": "otocare-7bf11",
+    "storage_bucket": "otocare-7bf11.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:288737141702:android:af84c35684af18282648c7",
+        "android_client_info": {
+          "package_name": "com.example.otocare"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAMKuX1az-Zfm8uQSqNpd94qTkqzACi-4Q"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

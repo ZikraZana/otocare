@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart'; // Tambahan buat database
 
 class RegisterPage extends StatefulWidget {
   const RegisterPage({super.key});
@@ -8,8 +10,9 @@ class RegisterPage extends StatefulWidget {
 }
 
 class _RegisterPageState extends State<RegisterPage> {
-  
   bool isAgreed = false;
+  bool isLoading = false;
+
   final TextEditingController _namaLengkapController = TextEditingController();
   final TextEditingController _nomorHandphoneController =
       TextEditingController();
@@ -17,6 +20,101 @@ class _RegisterPageState extends State<RegisterPage> {
   final TextEditingController _passwordController = TextEditingController();
   final TextEditingController _konfirmasiPasswordController =
       TextEditingController();
+
+  // Fungsi Register
+  Future<void> _handleRegister() async {
+    // 1. Validasi Input
+    if (_emailController.text.isEmpty ||
+        _passwordController.text.isEmpty ||
+        _namaLengkapController.text.isEmpty ||
+        _nomorHandphoneController.text.isEmpty) {
+      // Tambah validasi No HP
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("Semua data wajib diisi!")));
+      return;
+    }
+
+    if (_passwordController.text != _konfirmasiPasswordController.text) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Konfirmasi password tidak cocok!")),
+      );
+      return;
+    }
+
+    if (!isAgreed) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Kamu harus menyetujui syarat & ketentuan"),
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      isLoading = true;
+    });
+
+    try {
+      // 2. Buat User di Authentication
+      UserCredential userCredential = await FirebaseAuth.instance
+          .createUserWithEmailAndPassword(
+            email: _emailController.text.trim(),
+            password: _passwordController.text.trim(),
+          );
+
+      // Update Display Name di Auth
+      await userCredential.user?.updateDisplayName(_namaLengkapController.text);
+
+      // 3. Simpan Biodata Lengkap ke Firestore Database
+      // Kita pakai UID user sebagai nama dokumen biar gampang dicari
+      await FirebaseFirestore.instance
+          .collection('users') // Nama koleksi di database
+          .doc(userCredential.user!.uid) // Nama dokumen = UID User
+          .set({
+            'uid': userCredential.user!.uid,
+            'nama': _namaLengkapController.text,
+            'email': _emailController.text.trim(),
+            'nomor_hp': _nomorHandphoneController.text
+                .trim(), // Akhirnya tersimpan!
+            'role': 'admin', // Bisa diatur 'user' atau 'admin' sesuai kebutuhan
+            'created_at': FieldValue.serverTimestamp(),
+          });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Registrasi Berhasil! Data tersimpan."),
+            backgroundColor: Colors.green,
+          ),
+        );
+        Navigator.pop(context);
+      }
+    } on FirebaseAuthException catch (e) {
+      String message = e.message ?? "Terjadi kesalahan";
+      if (e.code == 'weak-password') message = "Password terlalu lemah";
+      if (e.code == 'email-already-in-use') message = "Email sudah terdaftar";
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message), backgroundColor: Colors.red),
+        );
+      }
+    } catch (e) {
+      // Catch error lain (misal koneksi database putus)
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          isLoading = false;
+        });
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -81,7 +179,7 @@ class _RegisterPageState extends State<RegisterPage> {
 
               const SizedBox(height: 10),
               _buildInput(_passwordController, "Password Baru", obscure: true),
-              
+
               const SizedBox(height: 10),
               _buildInput(
                 _konfirmasiPasswordController,
@@ -116,9 +214,7 @@ class _RegisterPageState extends State<RegisterPage> {
                 width: double.infinity,
                 height: 50,
                 child: ElevatedButton(
-                  onPressed: () {
-                    print("Tombol Daftar dipencet");
-                  },
+                  onPressed: isLoading ? null : _handleRegister,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFFD72638),
                     foregroundColor: Colors.white,
