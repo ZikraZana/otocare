@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:otocare/pages/admin/main_layout_admin.dart';
 import 'package:otocare/pages/auth/register.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:otocare/pages/user/main_layout_user.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -38,7 +39,7 @@ class _LoginPageState extends State<LoginPage> {
         // Pindah ke Dashboard Admin & Hapus histori login (biar gak bisa back)
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (context) => const MainLayoutAdmin()),
+          MaterialPageRoute(builder: (context) => MainLayoutUser()),
         );
       }
     } on FirebaseAuthException catch (e) {

@@ -77,7 +77,7 @@ class _RegisterPageState extends State<RegisterPage> {
             'email': _emailController.text.trim(),
             'nomor_hp': _nomorHandphoneController.text
                 .trim(), // Akhirnya tersimpan!
-            'role': 'admin', // Bisa diatur 'user' atau 'admin' sesuai kebutuhan
+            'role': 'user', // Bisa diatur 'user' atau 'admin' sesuai kebutuhan
             'created_at': FieldValue.serverTimestamp(),
           });
 
