@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-// Definisi Model & Enum tetap sama
+// Definisi Model & Enum
 enum BookingStatus { diterima, diproses, selesai, dibatalkan }
 
 class BookingItem {
@@ -22,7 +22,7 @@ class BookingItem {
 }
 
 class DaftarAntrianScreen extends StatelessWidget {
-  const DaftarAntrianScreen({super.key}); // const constructor
+  const DaftarAntrianScreen({super.key});
 
   // Style Constants
   static const Color _secondaryColor = Color(0xFFE53935);
