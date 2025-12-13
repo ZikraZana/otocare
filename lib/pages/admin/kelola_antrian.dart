@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class KelolaAntrian extends StatefulWidget {
   const KelolaAntrian({super.key});
@@ -10,15 +11,12 @@ class KelolaAntrian extends StatefulWidget {
 }
 
 class _KelolaAntrianState extends State<KelolaAntrian> {
-  // Variabel Pagination & Data
   final ScrollController _scrollController = ScrollController();
   List<Map<String, dynamic>> _dataBooking = [];
   bool _isLoading = false;
   bool _hasMore = true;
   int _limit = 10;
   DocumentSnapshot? _lastDocument;
-
-  // --- VARIABEL FILTER ---
   DateTime? _selectedDate;
 
   @override
@@ -28,7 +26,6 @@ class _KelolaAntrianState extends State<KelolaAntrian> {
     _fetchData();
 
     _scrollController.addListener(() {
-      // Pagination hanya jalan kalau TIDAK sedang filter tanggal
       if (_selectedDate == null &&
           _scrollController.position.pixels ==
               _scrollController.position.maxScrollExtent) {
@@ -43,27 +40,401 @@ class _KelolaAntrianState extends State<KelolaAntrian> {
     super.dispose();
   }
 
-  // --- LOGIC SORTING STATUS (Active di Atas, Inactive di Bawah) ---
-  int _getStatusPriority(String? status) {
-    // 0 = Paling Atas (Active)
-    // 1 = Paling Bawah (Inactive)
-    const activeStatuses = ['Menunggu', 'Diterima', 'Diproses'];
-    if (status != null && activeStatuses.contains(status)) {
-      return 0;
+  // --- 1. LOGIC KIRIM WHATSAPP (UPDATE: Handle Ditolak + Alasan) ---
+  Future<void> _sendWhatsApp({
+    required String phone,
+    String? name,
+    String? date,
+    String? time,
+    String? statusType, // 'Diterima', 'Selesai', 'Ditolak', 'Manual'
+    String? reason, // Tambahan untuk alasan tolak
+  }) async {
+    // Format Nomor HP
+    String formattedPhone = phone.trim();
+    formattedPhone = formattedPhone.replaceAll(RegExp(r'\D'), '');
+    if (formattedPhone.startsWith('0')) {
+      formattedPhone = '62${formattedPhone.substring(1)}';
+    } else if (formattedPhone.startsWith('8')) {
+      formattedPhone = '62$formattedPhone';
     }
+
+    // Tentukan Isi Pesan
+    String message = "";
+
+    if (statusType == 'Diterima') {
+      message =
+          "Halo Kak *$name*! 👋\n\n"
+          "Booking servis kamu di *OtoCare* untuk tanggal *$date* jam *$time WIB* telah *DITERIMA*.\n\n"
+          "Mohon datang tepat waktu ya. Terima kasih! 🛵💨";
+    } else if (statusType == 'Selesai') {
+      message =
+          "Halo Kak *$name*! 👋\n\n"
+          "Servis kendaraanmu sudah *SELESAI*! ✅\n"
+          "Silakan datang ke kasir/admin untuk pengambilan kendaraan.\n\n"
+          "Terima kasih telah mempercayakan servis di OtoCare! 🛵✨";
+    } else if (statusType == 'Ditolak') {
+      // Template Pesan Ditolak
+      message =
+          "Halo Kak *$name*! 👋\n\n"
+          "Mohon maaf, booking servis kamu di *OtoCare* saat ini harus kami *TOLAK* ❌.\n\n"
+          "Keterangan: _${reason ?? '-'}_ \n\n"
+          "Silakan lakukan booking ulang di waktu lain. Terima kasih atas pengertiannya. 🙏";
+    } else {
+      // Chat Manual
+      message = "Halo Kak *$name*, ini dari Admin OtoCare. 👋\n";
+    }
+
+    // Buka WhatsApp
+    final Uri url = Uri.parse(
+      "https://wa.me/$formattedPhone?text=${Uri.encodeComponent(message)}",
+    );
+
+    try {
+      await launchUrl(url, mode: LaunchMode.externalApplication);
+    } catch (e) {
+      print("Gagal membuka WA: $e");
+      try {
+        await launchUrl(url, mode: LaunchMode.platformDefault);
+      } catch (e2) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text("Gagal membuka WhatsApp."),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    }
+  }
+
+  // --- 2. LOGIC DATA & UPDATE ---
+  Future<void> _updateStatus(
+    String docId,
+    String newStatus, {
+    String? reason,
+  }) async {
+    Map<String, dynamic> updateData = {'status': newStatus};
+    if (reason != null && reason.isNotEmpty) {
+      updateData['alasan_penolakan'] = reason;
+    }
+    await FirebaseFirestore.instance
+        .collection('bookings')
+        .doc(docId)
+        .update(updateData);
+
+    setState(() {
+      int index = _dataBooking.indexWhere(
+        (element) => element['docId'] == docId,
+      );
+      if (index != -1) {
+        _dataBooking[index]['status'] = newStatus;
+        if (reason != null) _dataBooking[index]['alasan_penolakan'] = reason;
+
+        if (_selectedDate != null) {
+          _dataBooking.sort((a, b) {
+            int priorityA = _getStatusPriority(a['status']);
+            int priorityB = _getStatusPriority(b['status']);
+            if (priorityA != priorityB) return priorityA.compareTo(priorityB);
+            return (a['jam_booking'] ?? '').compareTo(b['jam_booking'] ?? '');
+          });
+        }
+      }
+    });
+  }
+
+  // --- 3. DIALOG ALASAN TOLAK (UPDATE: Kirim WA) ---
+  void _showRejectDialog(
+    BuildContext context,
+    String docId,
+    Map<String, String> waData,
+  ) {
+    final TextEditingController reasonController = TextEditingController();
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF2B2B2B),
+          title: const Text(
+            "Alasan Penolakan",
+            style: TextStyle(color: Colors.white),
+          ),
+          content: TextField(
+            controller: reasonController,
+            style: const TextStyle(color: Colors.white),
+            decoration: const InputDecoration(
+              hintText: "Misal: Bengkel penuh",
+              hintStyle: TextStyle(color: Colors.white54),
+              enabledBorder: UnderlineInputBorder(
+                borderSide: BorderSide(color: Colors.white54),
+              ),
+              focusedBorder: UnderlineInputBorder(
+                borderSide: BorderSide(color: Colors.red),
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              child: const Text("Batal"),
+              onPressed: () => Navigator.pop(context),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+              onPressed: () {
+                String reason = reasonController.text.trim();
+                if (reason.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text("Alasan harus diisi!")),
+                  );
+                  return;
+                }
+
+                // 1. Update Database
+                _updateStatus(docId, "Ditolak", reason: reason);
+
+                // 2. Kirim WA Notifikasi Ditolak
+                _sendWhatsApp(
+                  phone: waData['phone']!,
+                  name: waData['name'],
+                  statusType: 'Ditolak',
+                  reason: reason,
+                );
+
+                Navigator.pop(context); // Tutup Input
+                Navigator.pop(context); // Tutup Popup Utama
+              },
+              child: const Text(
+                "Tolak & Kirim WA",
+                style: TextStyle(color: Colors.white),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  // --- 4. BUILD TOMBOL AKSI (REJECT BUTTON TERIMA DATA WA) ---
+  Widget _buildRejectButton(
+    BuildContext context,
+    String docId,
+    Map<String, String> waData,
+  ) {
+    return ElevatedButton(
+      // Kirim waData ke Dialog
+      onPressed: () => _showRejectDialog(context, docId, waData),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: Colors.red,
+        foregroundColor: Colors.white,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        minimumSize: const Size(80, 36),
+      ),
+      child: const Text("Tolak"),
+    );
+  }
+
+  Widget _buildActionButton(
+    BuildContext context,
+    String label,
+    Color color,
+    String docId,
+    String newStatus, {
+    bool sendWa = false,
+    Map<String, String>? waData,
+  }) {
+    return ElevatedButton(
+      onPressed: () async {
+        await _updateStatus(docId, newStatus);
+        if (context.mounted) {
+          Navigator.pop(context);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text("Status: $newStatus"),
+              duration: const Duration(milliseconds: 800),
+            ),
+          );
+
+          if (sendWa && waData != null) {
+            _sendWhatsApp(
+              phone: waData['phone']!,
+              name: waData['name'],
+              date: waData['date'],
+              time: waData['time'],
+              statusType: newStatus,
+            );
+          }
+        }
+      },
+      style: ElevatedButton.styleFrom(
+        backgroundColor: color,
+        foregroundColor: (label == "Proses") ? Colors.black : Colors.white,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        minimumSize: const Size(80, 36),
+      ),
+      child: Text(label),
+    );
+  }
+
+  // --- 5. POPUP DETAIL ---
+  void _showDetailPopup(BuildContext context, Map<String, dynamic> data) {
+    String docId = data['docId'];
+    String nama = data['nama'] ?? '-';
+    String hp = data['no_hp'] ?? '-';
+    String merk = data['merk_kendaraan'] ?? '-';
+    String jenis = data['jenis_kendaraan'] ?? '-';
+    String plat = data['plat_nomor'] ?? '-';
+    String kendala = data['detail_kendala'] ?? '-';
+
+    DateTime? tgl = data['tanggal_booking'] != null
+        ? (data['tanggal_booking'] as Timestamp).toDate()
+        : null;
+    String tglStr = tgl != null
+        ? DateFormat('d MMMM yyyy', 'id_ID').format(tgl)
+        : '-';
+    String jam = data['jam_booking'] ?? '-';
+
+    Map<String, String> waInfo = {
+      'phone': hp,
+      'name': nama,
+      'date': tglStr,
+      'time': jam,
+    };
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return Dialog(
+          backgroundColor: const Color(0xFF282828),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: SingleChildScrollView(
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        "Detail Booking",
+                        style: TextStyle(
+                          fontFamily: "Nunito",
+                          fontSize: 18,
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () {
+                          _sendWhatsApp(
+                            phone: hp,
+                            name: nama,
+                            statusType: 'Manual',
+                          );
+                        },
+                        icon: const Icon(Icons.chat, color: Colors.green),
+                        tooltip: "Chat User di WhatsApp",
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  _buildDetailRow("Nama", nama),
+                  _buildDetailRow("HP", hp),
+                  _buildDetailRow("Jadwal", "$tglStr - $jam"),
+                  _buildDetailRow("Motor", "$merk $jenis ($plat)"),
+                  _buildDetailRow("Kategori", data['kategori_servis'] ?? '-'),
+                  const SizedBox(height: 10),
+                  const Text(
+                    "Keluhan:",
+                    style: TextStyle(color: Colors.white70, fontSize: 12),
+                  ),
+                  Text(
+                    kendala,
+                    style: const TextStyle(color: Colors.white, fontSize: 14),
+                  ),
+                  const SizedBox(height: 20),
+                  const Divider(color: Colors.grey),
+                  const SizedBox(height: 10),
+                  const Text(
+                    "Update Status:",
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      _buildActionButton(
+                        context,
+                        "Terima",
+                        Colors.blue,
+                        docId,
+                        "Diterima",
+                        sendWa: true,
+                        waData: waInfo,
+                      ),
+                      _buildActionButton(
+                        context,
+                        "Proses",
+                        Colors.amber,
+                        docId,
+                        "Diproses",
+                        sendWa: false,
+                      ),
+                      _buildActionButton(
+                        context,
+                        "Selesai",
+                        Colors.green,
+                        docId,
+                        "Selesai",
+                        sendWa: true,
+                        waData: waInfo,
+                      ),
+                      // Pass waInfo ke tombol reject
+                      _buildRejectButton(context, docId, waInfo),
+                    ],
+                  ),
+                  const SizedBox(height: 15),
+                  SizedBox(
+                    width: double.infinity,
+                    child: TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text(
+                        "Tutup",
+                        style: TextStyle(color: Colors.white54),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // --- HELPER LAINNYA ---
+  int _getStatusPriority(String? status) {
+    const activeStatuses = ['Menunggu', 'Diterima', 'Diproses'];
+    if (status != null && activeStatuses.contains(status)) return 0;
     return 1;
   }
 
-  // --- 1. FUNGSI LOAD DATA (MODIFIED FOR FILTER) ---
   Future<void> _fetchData() async {
     if (_isLoading) return;
-    // Jika mode pagination (tanpa filter) dan data habis, stop.
     if (_selectedDate == null && !_hasMore) return;
 
     setState(() => _isLoading = true);
 
     try {
-      // A. JIKA ADA FILTER TANGGAL
       if (_selectedDate != null) {
         DateTime start = DateTime(
           _selectedDate!.year,
@@ -72,7 +443,6 @@ class _KelolaAntrianState extends State<KelolaAntrian> {
         );
         DateTime end = start.add(const Duration(days: 1));
 
-        // Ambil SEMUA data di tanggal itu (tanpa limit pagination)
         QuerySnapshot snapshot = await FirebaseFirestore.instance
             .collection('bookings')
             .where(
@@ -89,17 +459,12 @@ class _KelolaAntrianState extends State<KelolaAntrian> {
           temp.add(data);
         }
 
-        // SORTING CUSTOM (Client Side)
-        // 1. Status Priority (Active First)
-        // 2. Jam Booking (Pagi First)
         temp.sort((a, b) {
           int priorityA = _getStatusPriority(a['status']);
           int priorityB = _getStatusPriority(b['status']);
-
           if (priorityA != priorityB) {
             return priorityA.compareTo(priorityB);
           } else {
-            // Jika priority sama, urutkan berdasarkan Jam
             String jamA = a['jam_booking'] ?? '';
             String jamB = b['jam_booking'] ?? '';
             return jamA.compareTo(jamB);
@@ -108,15 +473,13 @@ class _KelolaAntrianState extends State<KelolaAntrian> {
 
         setState(() {
           _dataBooking = temp;
-          _hasMore = false; // Disable load more saat mode filter
+          _hasMore = false;
         });
-      }
-      // B. JIKA TANPA FILTER (MODE PAGINATION LAMA)
-      else {
+      } else {
         Query query = FirebaseFirestore.instance
             .collection('bookings')
-            .orderBy('tanggal_booking', descending: false) // Terdekat
-            .orderBy('jam_booking', descending: false) // Pagi
+            .orderBy('tanggal_booking', descending: false)
+            .orderBy('jam_booking', descending: false)
             .limit(_limit);
 
         if (_lastDocument != null) {
@@ -144,7 +507,6 @@ class _KelolaAntrianState extends State<KelolaAntrian> {
     setState(() => _isLoading = false);
   }
 
-  // --- FUNGSI PILIH TANGGAL ---
   Future<void> _pickDate() async {
     DateTime? picked = await showDatePicker(
       context: context,
@@ -157,15 +519,14 @@ class _KelolaAntrianState extends State<KelolaAntrian> {
     if (picked != null) {
       setState(() {
         _selectedDate = picked;
-        _dataBooking.clear(); // Reset data
+        _dataBooking.clear();
         _lastDocument = null;
         _hasMore = true;
       });
-      _fetchData(); // Load data tanggal tsb
+      _fetchData();
     }
   }
 
-  // --- FUNGSI RESET FILTER ---
   void _clearFilter() {
     setState(() {
       _selectedDate = null;
@@ -176,7 +537,6 @@ class _KelolaAntrianState extends State<KelolaAntrian> {
     _fetchData();
   }
 
-  // --- REFRESH ---
   Future<void> _onRefresh() async {
     setState(() {
       _dataBooking.clear();
@@ -186,7 +546,6 @@ class _KelolaAntrianState extends State<KelolaAntrian> {
     await _fetchData();
   }
 
-  // --- AUTO CANCEL ---
   Future<void> _autoCancelExpiredBookings() async {
     try {
       QuerySnapshot snapshot = await FirebaseFirestore.instance
@@ -231,43 +590,6 @@ class _KelolaAntrianState extends State<KelolaAntrian> {
     }
   }
 
-  Future<void> _updateStatus(
-    String docId,
-    String newStatus, {
-    String? reason,
-  }) async {
-    Map<String, dynamic> updateData = {'status': newStatus};
-    if (reason != null && reason.isNotEmpty) {
-      updateData['alasan_penolakan'] = reason;
-    }
-    await FirebaseFirestore.instance
-        .collection('bookings')
-        .doc(docId)
-        .update(updateData);
-
-    // Update Local & Sort Ulang jika mode filter aktif
-    setState(() {
-      int index = _dataBooking.indexWhere(
-        (element) => element['docId'] == docId,
-      );
-      if (index != -1) {
-        _dataBooking[index]['status'] = newStatus;
-        if (reason != null) _dataBooking[index]['alasan_penolakan'] = reason;
-
-        // Jika sedang filter tanggal, sort ulang agar yang "Selesai" langsung turun ke bawah
-        if (_selectedDate != null) {
-          _dataBooking.sort((a, b) {
-            int priorityA = _getStatusPriority(a['status']);
-            int priorityB = _getStatusPriority(b['status']);
-            if (priorityA != priorityB) return priorityA.compareTo(priorityB);
-            return (a['jam_booking'] ?? '').compareTo(b['jam_booking'] ?? '');
-          });
-        }
-      }
-    });
-  }
-
-  // --- HELPER WARNA DLL TETAP SAMA ---
   Color _getStatusColor(String status) {
     switch (status) {
       case 'Diterima':
@@ -288,180 +610,6 @@ class _KelolaAntrianState extends State<KelolaAntrian> {
   Color _getStatusTextColor(String status) {
     if (status == 'Diproses') return Colors.black;
     return Colors.white;
-  }
-
-  void _showRejectDialog(BuildContext context, String docId) {
-    final TextEditingController reasonController = TextEditingController();
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: const Color(0xFF2B2B2B),
-          title: const Text(
-            "Alasan Penolakan",
-            style: TextStyle(color: Colors.white),
-          ),
-          content: TextField(
-            controller: reasonController,
-            style: const TextStyle(color: Colors.white),
-            decoration: const InputDecoration(
-              hintText: "Misal: Bengkel penuh",
-              hintStyle: TextStyle(color: Colors.white54),
-              enabledBorder: UnderlineInputBorder(
-                borderSide: BorderSide(color: Colors.white54),
-              ),
-              focusedBorder: UnderlineInputBorder(
-                borderSide: BorderSide(color: Colors.red),
-              ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              child: const Text("Batal"),
-              onPressed: () => Navigator.pop(context),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-              onPressed: () {
-                if (reasonController.text.trim().isEmpty) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text("Alasan harus diisi!")),
-                  );
-                  return;
-                }
-                _updateStatus(
-                  docId,
-                  "Ditolak",
-                  reason: reasonController.text.trim(),
-                );
-                Navigator.pop(context);
-                Navigator.pop(context);
-              },
-              child: const Text(
-                "Tolak Booking",
-                style: TextStyle(color: Colors.white),
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  void _showDetailPopup(BuildContext context, Map<String, dynamic> data) {
-    String docId = data['docId'];
-    String nama = data['nama'] ?? '-';
-    String jenis = data['jenis_kendaraan'] ?? '-';
-    String merk = data['merk_kendaraan'] ?? '-';
-    String plat = data['plat_nomor'] ?? '-';
-    String kendala = data['detail_kendala'] ?? '-';
-    String hp = data['no_hp'] ?? '-';
-
-    DateTime? tgl = data['tanggal_booking'] != null
-        ? (data['tanggal_booking'] as Timestamp).toDate()
-        : null;
-    String tglStr = tgl != null
-        ? DateFormat('d MMMM yyyy', 'id_ID').format(tgl)
-        : '-';
-    String jam = data['jam_booking'] ?? '-';
-
-    showDialog(
-      context: context,
-      builder: (context) {
-        return Dialog(
-          backgroundColor: const Color(0xFF282828),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: SingleChildScrollView(
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Text(
-                    "Detail Booking",
-                    style: TextStyle(
-                      fontFamily: "Nunito",
-                      fontSize: 18,
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 15),
-                  _buildDetailRow("Nama", nama),
-                  _buildDetailRow("HP", hp),
-                  _buildDetailRow("Jadwal", "$tglStr - $jam"),
-                  _buildDetailRow("Motor", "$merk $jenis ($plat)"),
-                  _buildDetailRow("Kategori", data['kategori_servis'] ?? '-'),
-                  const SizedBox(height: 10),
-                  const Text(
-                    "Keluhan:",
-                    style: TextStyle(color: Colors.white70, fontSize: 12),
-                  ),
-                  Text(
-                    kendala,
-                    style: const TextStyle(color: Colors.white, fontSize: 14),
-                  ),
-                  const SizedBox(height: 20),
-                  const Divider(color: Colors.grey),
-                  const SizedBox(height: 10),
-                  const Text(
-                    "Update Status:",
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      _buildActionButton(
-                        context,
-                        "Terima",
-                        Colors.blue,
-                        docId,
-                        "Diterima",
-                      ),
-                      _buildActionButton(
-                        context,
-                        "Proses",
-                        Colors.amber,
-                        docId,
-                        "Diproses",
-                      ),
-                      _buildActionButton(
-                        context,
-                        "Selesai",
-                        Colors.green,
-                        docId,
-                        "Selesai",
-                      ),
-                      _buildRejectButton(context, docId),
-                    ],
-                  ),
-                  const SizedBox(height: 15),
-                  SizedBox(
-                    width: double.infinity,
-                    child: TextButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text(
-                        "Tutup",
-                        style: TextStyle(color: Colors.white54),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    );
   }
 
   Widget _buildDetailRow(String label, String value) {
@@ -493,47 +641,6 @@ class _KelolaAntrianState extends State<KelolaAntrian> {
     );
   }
 
-  Widget _buildActionButton(
-    BuildContext context,
-    String label,
-    Color color,
-    String docId,
-    String newStatus,
-  ) {
-    return ElevatedButton(
-      onPressed: () {
-        _updateStatus(docId, newStatus);
-        Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text("Status: $newStatus"),
-            duration: const Duration(milliseconds: 800),
-          ),
-        );
-      },
-      style: ElevatedButton.styleFrom(
-        backgroundColor: color,
-        foregroundColor: (label == "Proses") ? Colors.black : Colors.white,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        minimumSize: const Size(80, 36),
-      ),
-      child: Text(label),
-    );
-  }
-
-  Widget _buildRejectButton(BuildContext context, String docId) {
-    return ElevatedButton(
-      onPressed: () => _showRejectDialog(context, docId),
-      style: ElevatedButton.styleFrom(
-        backgroundColor: Colors.red,
-        foregroundColor: Colors.white,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        minimumSize: const Size(80, 36),
-      ),
-      child: const Text("Tolak"),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     String headerTitle = "Antrian Keseluruhan";
@@ -544,7 +651,6 @@ class _KelolaAntrianState extends State<KelolaAntrian> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // HEADER MODIFIED: Title + Icon Filter
         Padding(
           padding: const EdgeInsets.fromLTRB(20, 20, 20, 10),
           child: Row(
@@ -560,7 +666,6 @@ class _KelolaAntrianState extends State<KelolaAntrian> {
               ),
               Row(
                 children: [
-                  // Jika sedang filter, munculkan tombol X
                   if (_selectedDate != null)
                     IconButton(
                       icon: const Icon(Icons.close, color: Colors.red),
@@ -580,7 +685,6 @@ class _KelolaAntrianState extends State<KelolaAntrian> {
             ],
           ),
         ),
-
         Expanded(
           child: RefreshIndicator(
             onRefresh: _onRefresh,
@@ -621,10 +725,7 @@ class _KelolaAntrianState extends State<KelolaAntrian> {
                           ),
                         );
                       }
-
                       var data = _dataBooking[index];
-
-                      String docId = data['docId'];
                       String nama = data['nama'] ?? 'Tanpa Nama';
                       String status = data['status'] ?? 'Menunggu';
                       String jenis = data['jenis_kendaraan'] ?? '';
@@ -636,9 +737,6 @@ class _KelolaAntrianState extends State<KelolaAntrian> {
                           ? DateFormat('d MMM', 'id_ID').format(tgl)
                           : '-';
                       String jam = data['jam_booking'] ?? '';
-
-                      // Logic Warna Card: Jika Selesai/Batal/Tolak => Gelap, Jika Aktif => Terang dikit
-                      // Tapi user minta Selesai di bawah, secara visual biar gampang kita bedakan opacity-nya
                       bool isInactive = [
                         'Selesai',
                         'Ditolak',
@@ -648,9 +746,7 @@ class _KelolaAntrianState extends State<KelolaAntrian> {
                       return GestureDetector(
                         onTap: () => _showDetailPopup(context, data),
                         child: Opacity(
-                          opacity: isInactive
-                              ? 0.6
-                              : 1.0, // Biar yang selesai terlihat "redup"
+                          opacity: isInactive ? 0.6 : 1.0,
                           child: Card(
                             color: const Color(0xFF424242),
                             margin: const EdgeInsets.only(bottom: 16),
