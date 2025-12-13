@@ -1,25 +1,7 @@
 import 'package:flutter/material.dart';
-
-// Definisi Model & Enum
-enum BookingStatus { diterima, diproses, selesai, dibatalkan }
-
-class BookingItem {
-  final String tanggalWaktu;
-  final String jenisKendaraan;
-  final String platNomor;
-  final String bengkel;
-  final String noAntrian;
-  final BookingStatus status;
-
-  const BookingItem({
-    required this.tanggalWaktu,
-    required this.jenisKendaraan,
-    required this.platNomor,
-    required this.bengkel,
-    required this.noAntrian,
-    required this.status,
-  });
-}
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:intl/intl.dart'; // Import intl untuk format tanggal
 
 class DaftarAntrianScreen extends StatelessWidget {
   const DaftarAntrianScreen({super.key});
@@ -42,63 +24,133 @@ class DaftarAntrianScreen extends StatelessWidget {
     );
   }
 
-  // Data Dummy
-  final List<BookingItem> activeBookings = const [
-    BookingItem(
-      tanggalWaktu: '12 Desember 2025 - 16:00 WIB',
-      jenisKendaraan: 'Yamaha NMax',
-      platNomor: 'BH 2112 AS',
-      bengkel: 'KSG (Servis Berkala)',
-      noAntrian: '03',
-      status: BookingStatus.diterima,
-    ),
-    BookingItem(
-      tanggalWaktu: '15 Desember 2025 - 09:30 WIB',
-      jenisKendaraan: 'Honda Beat',
-      platNomor: 'BH 3000 DMR',
-      bengkel: 'KSG (Servis Berkala)',
-      noAntrian: '10',
-      status: BookingStatus.diterima,
-    ),
-  ];
+  // Fungsi Hapus/Batal Booking
+  Future<void> _cancelBooking(BuildContext context, String docId) async {
+    bool confirm =
+        await showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            backgroundColor: const Color(0xFF2B2B2B),
+            title: const Text(
+              "Batalkan Booking?",
+              style: TextStyle(color: Colors.white),
+            ),
+            content: const Text(
+              "Apakah kamu yakin ingin membatalkan antrian ini?",
+              style: TextStyle(color: Colors.white70),
+            ),
+            actions: [
+              TextButton(
+                child: const Text("Tidak"),
+                onPressed: () => Navigator.pop(context, false),
+              ),
+              TextButton(
+                child: const Text(
+                  "Ya, Batalkan",
+                  style: TextStyle(color: Colors.red),
+                ),
+                onPressed: () => Navigator.pop(context, true),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+
+    if (confirm) {
+      await FirebaseFirestore.instance
+          .collection('bookings')
+          .doc(docId)
+          .delete();
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Booking berhasil dibatalkan")),
+        );
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    bool hasActiveBookings = activeBookings.isNotEmpty;
+    User? user = FirebaseAuth.instance.currentUser;
 
-    // KITA TIDAK PAKAI SCAFFOLD LAGI DISINI
-    // Langsung return Column / Content
-    return hasActiveBookings
-        ? _buildActiveState(context, activeBookings)
-        : _buildEmptyState(context);
-  }
+    if (user == null) {
+      return const Center(
+        child: Text(
+          "Silakan login terlebih dahulu",
+          style: TextStyle(color: Colors.white),
+        ),
+      );
+    }
 
-  Widget _buildActiveState(BuildContext context, List<BookingItem> bookings) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const SizedBox(height: 24),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Text(
-            'Antrian Saya',
-            style: _nunitoTextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-          ),
-        ),
-        const SizedBox(height: 16),
-        Expanded(
-          child: ListView.builder(
-            padding: const EdgeInsets.symmetric(horizontal: 20.0),
-            itemCount: bookings.length,
-            itemBuilder: (context, index) {
-              return _buildAntrianCard(context, bookings[index]);
-            },
-          ),
-        ),
-      ],
+    // STREAMBUILDER: Memantau database secara live
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('bookings')
+          .where('uid', isEqualTo: user.uid) // Filter punya user ini saja
+          // Kita filter status agar riwayat 'Selesai'/'Ditolak' tidak numpuk disini (Opsional)
+          // Kalau mau tampil semua, hapus .where('status'...) dibawah ini
+          .where('status', whereIn: ['Menunggu', 'Diterima', 'Diproses'])
+          .orderBy('created_at', descending: true)
+          .snapshots(),
+      builder: (context, snapshot) {
+        // 1. Loading State
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(
+            child: CircularProgressIndicator(color: _secondaryColor),
+          );
+        }
+
+        // 2. Error State
+        if (snapshot.hasError) {
+          return Center(
+            child: Text(
+              "Terjadi kesalahan: ${snapshot.error}",
+              style: const TextStyle(color: Colors.white),
+            ),
+          );
+        }
+
+        // 3. Empty State (Tidak ada data)
+        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+          return _buildEmptyState(context);
+        }
+
+        // 4. Data Ada -> Tampilkan List
+        var documents = snapshot.data!.docs;
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SizedBox(height: 24),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20.0),
+              child: Text(
+                'Antrian Saya',
+                style: _nunitoTextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Expanded(
+              child: ListView.builder(
+                padding: const EdgeInsets.symmetric(horizontal: 20.0),
+                itemCount: documents.length,
+                itemBuilder: (context, index) {
+                  var data = documents[index].data() as Map<String, dynamic>;
+                  String docId = documents[index].id;
+                  return _buildAntrianCard(context, data, docId);
+                },
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 
+  // Tampilan kalau belum ada booking
   Widget _buildEmptyState(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20.0),
@@ -122,25 +174,10 @@ class DaftarAntrianScreen extends StatelessWidget {
                   ),
                   const SizedBox(height: 10),
                   Text(
-                    'Belum ada jadwal servis',
+                    'Belum ada jadwal servis aktif',
                     style: _nunitoTextStyle(
                       color: Colors.white60,
                       fontSize: 20,
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  ElevatedButton(
-                    onPressed: () {},
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: _secondaryColor,
-                      padding: const EdgeInsets.symmetric(
-                        vertical: 10,
-                        horizontal: 30,
-                      ),
-                    ),
-                    child: Text(
-                      'Tambah Servis',
-                      style: _nunitoTextStyle(fontWeight: FontWeight.bold),
                     ),
                   ),
                 ],
@@ -152,14 +189,39 @@ class DaftarAntrianScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildAntrianCard(BuildContext context, BookingItem item) {
+  // Tampilan Kartu Antrian Real
+  Widget _buildAntrianCard(
+    BuildContext context,
+    Map<String, dynamic> data,
+    String docId,
+  ) {
     final Color cardBackground = _neutralColor.withOpacity(0.4);
 
+    // Ambil data dari Firestore
+    String status = data['status'] ?? 'Menunggu';
+    String jenis = data['jenis_kendaraan'] ?? '-';
+    String plat = data['plat_nomor'] ?? '-';
+    String bengkel = data['kategori_servis'] ?? 'Umum';
+    String jam = data['jam_booking'] ?? '-';
+
+    // Format Tanggal
+    DateTime? tglBooking;
+    if (data['tanggal_booking'] != null) {
+      tglBooking = (data['tanggal_booking'] as Timestamp).toDate();
+    }
+    String tanggalStr = tglBooking != null
+        ? DateFormat('d MMMM yyyy', 'id_ID').format(
+            tglBooking,
+          ) // Format Indonesia
+        : '-';
+
     // Logic warna status
-    Color getStatusColor(BookingStatus s) {
-      if (s == BookingStatus.diterima) return Colors.blue;
-      if (s == BookingStatus.diproses) return Colors.amber.shade800;
-      return Colors.grey;
+    Color getStatusColor(String s) {
+      if (s == 'Diterima') return Colors.blue;
+      if (s == 'Diproses') return Colors.amber.shade800;
+      if (s == 'Selesai') return Colors.green;
+      if (s == 'Ditolak') return Colors.red;
+      return Colors.grey; // Default untuk 'Menunggu'
     }
 
     return Container(
@@ -176,11 +238,11 @@ class DaftarAntrianScreen extends StatelessWidget {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             decoration: BoxDecoration(
-              color: getStatusColor(item.status),
+              color: getStatusColor(status),
               borderRadius: BorderRadius.circular(4),
             ),
             child: Text(
-              item.status.name.toUpperCase(),
+              status.toUpperCase(),
               style: _nunitoTextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.bold,
@@ -195,27 +257,27 @@ class DaftarAntrianScreen extends StatelessWidget {
               Expanded(
                 child: Column(
                   children: [
-                    _buildIconText(Icons.calendar_today, item.tanggalWaktu),
+                    _buildIconText(Icons.calendar_today, "$tanggalStr - $jam"),
                     const SizedBox(height: 4),
-                    _buildIconText(
-                      Icons.motorcycle,
-                      '${item.jenisKendaraan} (${item.platNomor})',
-                    ),
+                    _buildIconText(Icons.motorcycle, '$jenis ($plat)'),
                     const SizedBox(height: 4),
-                    _buildIconText(Icons.business, item.bengkel),
+                    _buildIconText(Icons.business, "Kategori: $bengkel"),
                     const SizedBox(height: 10),
+                    // KITA PAKAI DETAIL KENDALA SEBAGAI INFO TAMBAHAN
                     _buildIconText(
-                      Icons.numbers,
-                      'No. Antrian: ${item.noAntrian}',
+                      Icons.note,
+                      'Keluhan: ${data['detail_kendala'] ?? '-'}',
                     ),
                   ],
                 ),
               ),
-              if (item.status == BookingStatus.diterima)
+
+              // Tombol Batal hanya muncul jika status masih 'Menunggu'
+              if (status == 'Menunggu')
                 SizedBox(
                   height: 30,
                   child: ElevatedButton(
-                    onPressed: () {},
+                    onPressed: () => _cancelBooking(context, docId),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: _secondaryColor,
                     ),

@@ -1,22 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:intl/intl.dart';
+import 'package:otocare/pages/auth/login.dart'; // Import halaman Login
 
-// ================== SIMULASI DATA ==================
-Future<String> getUserName() async {
-  await Future.delayed(const Duration(milliseconds: 800));
-  return "Nathania";
-}
-
-Future<Map<String, dynamic>> getAntrianUser() async {
-  await Future.delayed(const Duration(milliseconds: 900));
-  return {"tanggal": "16 Desember 2025", "jam": "16:00"};
-}
-
-Future<int> getRiwayatCount() async {
-  await Future.delayed(const Duration(milliseconds: 600));
-  return 5;
-}
-
-// ================== DASHBOARD ==================
 class DashboardPage extends StatefulWidget {
   // Callback untuk ganti tab di MainLayoutUser
   final Function(int) onTabChange;
@@ -28,29 +15,47 @@ class DashboardPage extends StatefulWidget {
 }
 
 class _DashboardPageState extends State<DashboardPage> {
-  String namaUser = "";
-  String tanggalAntrian = "-";
-  String jamAntrian = "-";
-  int riwayatJumlah = 0;
+  User? user = FirebaseAuth.instance.currentUser;
 
-  @override
-  void initState() {
-    super.initState();
-    loadDashboardData();
-  }
+  // --- FUNGSI LOGOUT ---
+  Future<void> _handleLogout() async {
+    // Tampilkan konfirmasi dialog dulu biar ga kepencet
+    bool confirm =
+        await showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            backgroundColor: const Color(0xFF2B2B2B),
+            title: const Text("Keluar?", style: TextStyle(color: Colors.white)),
+            content: const Text(
+              "Apakah kamu yakin ingin keluar dari akun?",
+              style: TextStyle(color: Colors.white70),
+            ),
+            actions: [
+              TextButton(
+                child: const Text("Batal"),
+                onPressed: () => Navigator.pop(context, false),
+              ),
+              TextButton(
+                child: const Text(
+                  "Ya, Keluar",
+                  style: TextStyle(color: Colors.red),
+                ),
+                onPressed: () => Navigator.pop(context, true),
+              ),
+            ],
+          ),
+        ) ??
+        false;
 
-  void loadDashboardData() async {
-    String user = await getUserName();
-    Map antrian = await getAntrianUser();
-    int jumlahRiwayat = await getRiwayatCount();
-
-    if (mounted) {
-      setState(() {
-        namaUser = user;
-        tanggalAntrian = antrian["tanggal"];
-        jamAntrian = antrian["jam"];
-        riwayatJumlah = jumlahRiwayat;
-      });
+    if (confirm) {
+      await FirebaseAuth.instance.signOut();
+      if (mounted) {
+        // Kembali ke halaman Login & Hapus semua rute sebelumnya
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (context) => const LoginPage()),
+          (route) => false,
+        );
+      }
     }
   }
 
@@ -65,17 +70,44 @@ class _DashboardPageState extends State<DashboardPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Judul OtoCare dihapus (karena sudah ada di AppBar MainLayout)
+              // ========== 1. HEADER (GREETING + LOGOUT) ==========
+              StreamBuilder<DocumentSnapshot>(
+                stream: FirebaseFirestore.instance
+                    .collection('users')
+                    .doc(user?.uid)
+                    .snapshots(),
+                builder: (context, snapshot) {
+                  String greetingName = "User";
+                  if (snapshot.hasData && snapshot.data!.exists) {
+                    var data = snapshot.data!.data() as Map<String, dynamic>;
+                    String fullName = data['nama'] ?? "User";
+                    greetingName = fullName.split(" ")[0]; // Ambil nama depan
+                  }
 
-              // ========== GREETING DINAMIS ==========
-              Text(
-                "Halo $namaUser! 👋",
-                style: const TextStyle(
-                  fontFamily: "Nunito",
-                  fontSize: 28,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
-                ),
+                  return Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        "Halo $greetingName! 👋",
+                        style: const TextStyle(
+                          fontFamily: "Nunito",
+                          fontSize: 28,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                      ),
+                      // TOMBOL LOGOUT
+                      IconButton(
+                        onPressed: _handleLogout,
+                        icon: const Icon(
+                          Icons.logout_rounded,
+                          color: Colors.redAccent,
+                        ),
+                        tooltip: "Keluar",
+                      ),
+                    ],
+                  );
+                },
               ),
 
               const SizedBox(height: 25),
@@ -95,8 +127,7 @@ class _DashboardPageState extends State<DashboardPage> {
 
               // ========== CARD FORM BOOKING ==========
               GestureDetector(
-                // Aksi: Pindah ke Tab 1 (Booking)
-                onTap: () => widget.onTabChange(1),
+                onTap: () => widget.onTabChange(1), // Pindah ke Tab Booking
                 child: Container(
                   width: double.infinity,
                   padding: const EdgeInsets.all(18),
@@ -120,7 +151,6 @@ class _DashboardPageState extends State<DashboardPage> {
                         ),
                       ),
                       const SizedBox(width: 15),
-
                       const Expanded(
                         child: Text(
                           "Tentukan Tanggal Servismu!\nAda yang salah dengan kendaraanmu? Tentukan tanggal perbaikannya sekarang!",
@@ -151,101 +181,160 @@ class _DashboardPageState extends State<DashboardPage> {
 
               const SizedBox(height: 12),
 
-              // ========== TWO CARDS ROW ==========
+              // ========== TWO CARDS ROW (REALTIME DATA) ==========
               Row(
                 children: [
-                  // ========== CARD ANTRIAN ==========
+                  // ========== 2. CARD ANTRIAN (STREAM) ==========
                   Expanded(
-                    child: GestureDetector(
-                      // Aksi: Pindah ke Tab 2 (Antrian)
-                      onTap: () => widget.onTabChange(2),
-                      child: Container(
-                        padding: const EdgeInsets.all(18),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFD52C2C),
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Icon(
-                              Icons.access_time_filled_rounded,
-                              color: Colors.white,
-                              size: 32,
+                    child: StreamBuilder<QuerySnapshot>(
+                      stream: FirebaseFirestore.instance
+                          .collection('bookings')
+                          .where('uid', isEqualTo: user?.uid)
+                          .where(
+                            'status',
+                            whereIn: ['Menunggu', 'Diproses', 'Diterima'],
+                          )
+                          .orderBy('created_at', descending: true)
+                          .limit(1)
+                          .snapshots(),
+                      builder: (context, snapshot) {
+                        String infoText = "Belum ada antrian aktif";
+
+                        if (snapshot.hasData &&
+                            snapshot.data!.docs.isNotEmpty) {
+                          var data =
+                              snapshot.data!.docs.first.data()
+                                  as Map<String, dynamic>;
+
+                          DateTime? tgl = data['tanggal_booking'] != null
+                              ? (data['tanggal_booking'] as Timestamp).toDate()
+                              : null;
+                          String jam = data['jam_booking'] ?? '-';
+
+                          String dateStr = tgl != null
+                              ? DateFormat('d MMM', 'id_ID').format(tgl)
+                              : '-';
+
+                          infoText = "Datang pada tanggal\n$dateStr, $jam WIB";
+                        }
+
+                        return GestureDetector(
+                          onTap: () => widget.onTabChange(2),
+                          child: Container(
+                            height: 140,
+                            padding: const EdgeInsets.all(18),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFD52C2C),
+                              borderRadius: BorderRadius.circular(16),
                             ),
-                            const SizedBox(height: 10),
-                            const Text(
-                              "Antrian Kamu",
-                              style: TextStyle(
-                                fontFamily: "Nunito",
-                                fontSize: 17,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white,
-                              ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                const Icon(
+                                  Icons.access_time_filled_rounded,
+                                  color: Colors.white,
+                                  size: 32,
+                                ),
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text(
+                                      "Antrian Kamu",
+                                      style: TextStyle(
+                                        fontFamily: "Nunito",
+                                        fontSize: 17,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      infoText,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontFamily: "Nunito",
+                                        fontSize: 13,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
                             ),
-                            const SizedBox(height: 6),
-                            Text(
-                              "Datang pada tanggal\n$tanggalAntrian, $jamAntrian",
-                              style: const TextStyle(
-                                fontFamily: "Nunito",
-                                fontSize: 13,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
+                          ),
+                        );
+                      },
                     ),
                   ),
 
                   const SizedBox(width: 15),
 
-                  // ========== CARD RIWAYAT ==========
+                  // ========== 3. CARD RIWAYAT (Manual Count) ==========
                   Expanded(
-                    child: GestureDetector(
-                      // Aksi: Pindah ke Tab 3 (Riwayat)
-                      onTap: () => widget.onTabChange(3),
-                      child: Container(
-                        padding: const EdgeInsets.all(18),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFD52C2C),
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Icon(
-                              Icons.history_rounded,
-                              color: Colors.white,
-                              size: 32,
+                    child: StreamBuilder<QuerySnapshot>(
+                      stream: FirebaseFirestore.instance
+                          .collection('bookings')
+                          .where('uid', isEqualTo: user?.uid)
+                          .where('status', isEqualTo: 'Selesai')
+                          .snapshots(),
+                      builder: (context, snapshot) {
+                        int count = 0;
+                        if (snapshot.hasData) {
+                          count = snapshot.data!.docs.length;
+                        }
+
+                        return GestureDetector(
+                          onTap: () => widget.onTabChange(3),
+                          child: Container(
+                            height: 140,
+                            padding: const EdgeInsets.all(18),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFD52C2C),
+                              borderRadius: BorderRadius.circular(16),
                             ),
-                            const SizedBox(height: 10),
-                            const Text(
-                              "Riwayat Kamu",
-                              style: TextStyle(
-                                fontFamily: "Nunito",
-                                fontSize: 17,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white,
-                              ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                const Icon(
+                                  Icons.history_rounded,
+                                  color: Colors.white,
+                                  size: 32,
+                                ),
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text(
+                                      "Riwayat Kamu",
+                                      style: TextStyle(
+                                        fontFamily: "Nunito",
+                                        fontSize: 17,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      "Kamu memiliki $count riwayat servis",
+                                      style: const TextStyle(
+                                        fontFamily: "Nunito",
+                                        fontSize: 13,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
                             ),
-                            const SizedBox(height: 6),
-                            Text(
-                              "Kamu memiliki $riwayatJumlah riwayat servis",
-                              style: const TextStyle(
-                                fontFamily: "Nunito",
-                                fontSize: 13,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
+                          ),
+                        );
+                      },
                     ),
                   ),
                 ],
               ),
-              // Padding tambahan bawah
               const SizedBox(height: 30),
             ],
           ),

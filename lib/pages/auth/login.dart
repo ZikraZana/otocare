@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:otocare/pages/admin/main_layout_admin.dart';
 import 'package:otocare/pages/auth/register.dart';
@@ -30,17 +31,45 @@ class _LoginPageState extends State<LoginPage> {
     });
 
     try {
-      await FirebaseAuth.instance.signInWithEmailAndPassword(
-        email: _emailController.text.trim(),
-        password: _passwordController.text.trim(),
-      );
+      // 1. Login ke Firebase Auth
+      UserCredential userCredential = await FirebaseAuth.instance
+          .signInWithEmailAndPassword(
+            email: _emailController.text.trim(),
+            password: _passwordController.text.trim(),
+          );
+
+      // 2. Ambil Data User dari Firestore untuk Cek Role
+      String uid = userCredential.user!.uid;
+      DocumentSnapshot userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .get();
 
       if (mounted) {
-        // Pindah ke Dashboard Admin & Hapus histori login (biar gak bisa back)
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (context) => MainLayoutUser()),
-        );
+        if (userDoc.exists) {
+          String role = userDoc.get('role') ?? 'user';
+
+          if (role == 'admin') {
+            // Arahkan ke Admin
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(builder: (context) => const MainLayoutAdmin()),
+            );
+          } else {
+            // Arahkan ke User
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(builder: (context) => const MainLayoutUser()),
+            );
+          }
+        } else {
+          // Jaga-jaga jika dokumen user tidak ditemukan di database
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text("Data user tidak ditemukan di database."),
+            ),
+          );
+        }
       }
     } on FirebaseAuthException catch (e) {
       String message = "Login Gagal";

@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart'; // 1. Import Firestore
+import 'package:firebase_auth/firebase_auth.dart'; // 2. Import Auth
 
 // ==========================================
 // MAIN SCREEN: BOOKING FORM
@@ -24,10 +26,13 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
 
   final List<BookingTimeSlot> jamList = [
     BookingTimeSlot(time: "08:00", isAvailable: true),
-    BookingTimeSlot(time: "10:00", isAvailable: false),
+    BookingTimeSlot(
+      time: "10:00",
+      isAvailable: true,
+    ), // Ubah availability sesuai kebutuhan
     BookingTimeSlot(time: "12:00", isAvailable: true),
     BookingTimeSlot(time: "14:00", isAvailable: true),
-    BookingTimeSlot(time: "16:00", isAvailable: false),
+    BookingTimeSlot(time: "16:00", isAvailable: true),
     BookingTimeSlot(time: "18:00", isAvailable: true),
   ];
 
@@ -35,10 +40,119 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
   DateTime? selectedDate;
   bool isFormEnabled = true;
 
+  // --- TAMBAHAN BARU: Loading State ---
+  bool isLoading = false;
+
   // Colors
   static const Color bgColor = Color(0xFF2B2B2B);
   static const Color textColor = Color(0xFFFAFAFA);
   static const Color blueButton = Color(0xFF3991D9);
+
+  @override
+  void initState() {
+    super.initState();
+    // --- TAMBAHAN BARU: Ambil data user saat halaman dibuka ---
+    _loadUserData();
+  }
+
+  // --- TAMBAHAN BARU: Fungsi Ambil Data User (Nama & HP) ---
+  void _loadUserData() async {
+    User? user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      try {
+        DocumentSnapshot userDoc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .get();
+
+        if (userDoc.exists && mounted) {
+          setState(() {
+            // Isi controller Nama dan HP otomatis
+            nameC.text = userDoc['nama'] ?? '';
+            phoneC.text = userDoc['nomor_hp'] ?? '';
+          });
+        }
+      } catch (e) {
+        print("Gagal ambil data user: $e");
+      }
+    }
+  }
+
+  // --- TAMBAHAN BARU: Fungsi Kirim Booking ke Firestore ---
+  Future<void> _submitBooking() async {
+    // 1. Validasi Input
+    if (selectedDate == null ||
+        selectedJam == null ||
+        selectedKategori == null ||
+        jenisC.text.isEmpty ||
+        merkC.text.isEmpty ||
+        platC.text.isEmpty ||
+        detailC.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Mohon lengkapi semua data booking!"),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    setState(() => isLoading = true);
+
+    try {
+      User? user = FirebaseAuth.instance.currentUser;
+      if (user == null) return;
+
+      // 2. Kirim ke Database
+      await FirebaseFirestore.instance.collection('bookings').add({
+        'uid': user.uid,
+        'nama': nameC.text, // Dari controller yg sudah terisi otomatis
+        'no_hp': phoneC.text, // Dari controller yg sudah terisi otomatis
+        'jenis_kendaraan': jenisC.text,
+        'merk_kendaraan': merkC.text,
+        'plat_nomor': platC.text,
+        'kategori_servis': selectedKategori,
+        'detail_kendala': detailC.text,
+        'tanggal_booking': Timestamp.fromDate(
+          selectedDate!,
+        ), // Simpan sbg Timestamp
+        'jam_booking': selectedJam,
+        'status': 'Menunggu', // Status awal
+        'created_at': FieldValue.serverTimestamp(),
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Booking Berhasil! Menunggu konfirmasi admin."),
+            backgroundColor: Colors.green,
+          ),
+        );
+
+        // 3. Reset Form setelah sukses
+        setState(() {
+          jenisC.clear();
+          merkC.clear();
+          platC.clear();
+          detailC.clear();
+          selectedJam = null;
+          selectedDate = null;
+          selectedKategori = null;
+          isLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Gagal Booking: $e"),
+            backgroundColor: Colors.red,
+          ),
+        );
+        setState(() => isLoading = false);
+      }
+    }
+  }
 
   @override
   void dispose() {
@@ -53,7 +167,6 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // TIDAK PAKAI SCAFFOLD/APPBAR LAGI
     return Container(
       color: bgColor,
       child: SingleChildScrollView(
@@ -91,9 +204,9 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
             CustomTextField(
               controller: nameC,
               label: 'Nama',
-              hint: 'Nama lengkap',
+              hint: 'Loading...', // Ubah hint biar tau lagi loading
               useGrayFill: true,
-              enabled: false,
+              enabled: false, // Tetap false karena ambil dari DB
             ),
             const SizedBox(height: 20),
             DatePickerField(
@@ -137,10 +250,10 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
             CustomTextField(
               controller: phoneC,
               label: 'No Handphone',
-              hint: '08xxxxxxxxx',
+              hint: 'Loading...',
               useGrayFill: true,
               keyboard: TextInputType.phone,
-              enabled: false,
+              enabled: false, // Tetap false
             ),
             const SizedBox(height: 14),
             CustomDropdown(
@@ -163,13 +276,19 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton(
-                onPressed: isFormEnabled
+                // --- MODIFIKASI: Disable tombol saat loading ---
+                onPressed: (isFormEnabled && !isLoading)
                     ? () {
                         showDialog(
                           context: context,
-                          builder: (_) => const PopupKonfirmasi(
+                          builder: (_) => PopupKonfirmasi(
                             title:
                                 'Apakah Kamu Yakin Ingin Melakukan Booking Servis?',
+                            // --- MODIFIKASI: Panggil fungsi submit ---
+                            onConfirm: () {
+                              // Logic dipanggil di sini setelah user klik "Iya"
+                              _submitBooking();
+                            },
                           ),
                         );
                       }
@@ -182,13 +301,22 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
                     borderRadius: BorderRadius.circular(12),
                   ),
                 ),
-                child: const Text(
-                  'Booking Sekarang',
-                  style: TextStyle(
-                    color: textColor,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
+                child: isLoading
+                    ? const SizedBox(
+                        height: 20,
+                        width: 20,
+                        child: CircularProgressIndicator(
+                          color: Colors.white,
+                          strokeWidth: 2,
+                        ),
+                      )
+                    : const Text(
+                        'Booking Sekarang',
+                        style: TextStyle(
+                          color: textColor,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
               ),
             ),
             const SizedBox(height: 30),
@@ -280,8 +408,9 @@ class PopupKonfirmasi extends StatelessWidget {
                 Expanded(
                   child: ElevatedButton(
                     onPressed: () {
-                      Navigator.pop(context);
-                      if (onConfirm != null) onConfirm!();
+                      Navigator.pop(context); // Tutup dialog dulu
+                      if (onConfirm != null)
+                        onConfirm!(); // Baru jalankan fungsi
                     },
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color.fromARGB(255, 217, 57, 57),
@@ -309,6 +438,11 @@ class PopupKonfirmasi extends StatelessWidget {
     );
   }
 }
+
+// ... SISA WIDGET BAWAHNYA (DatePickerField, BookingTimeSelector, CustomDropdown, CustomTextField)
+// ... TIDAK PERLU DIUBAH, BIARKAN SAMA SEPERTI KODE LAMA KAMU
+// ... Paste ulang Helper Widget sisanya di sini kalau mau file lengkap satu blok,
+// ... Tapi yang penting diubah hanya CLASS BookingFormScreen & PopupKonfirmasi saja.
 
 class DatePickerField extends StatelessWidget {
   final DateTime? selectedDate;

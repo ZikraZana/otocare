@@ -1,10 +1,10 @@
-import 'package:cloud_firestore/cloud_firestore.dart'; // Akses Database
-import 'package:firebase_auth/firebase_auth.dart';     // Akses Auth
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:otocare/pages/auth/login.dart';        // Arahkan ke Login saat logout
+import 'package:otocare/pages/auth/login.dart';
+import 'package:intl/intl.dart';
 
 class DashboardAdminPage extends StatefulWidget {
-  // Callback ini dipanggil saat tombol menu "Kelola Antrian" diklik
   final VoidCallback? onGoToAntrian;
 
   const DashboardAdminPage({super.key, this.onGoToAntrian});
@@ -14,10 +14,8 @@ class DashboardAdminPage extends StatefulWidget {
 }
 
 class _DashboardAdminPageState extends State<DashboardAdminPage> {
-  // Ambil user yang sedang login
   final user = FirebaseAuth.instance.currentUser;
 
-  // Fungsi Logout
   Future<void> _handleLogout() async {
     await FirebaseAuth.instance.signOut();
     if (mounted) {
@@ -30,21 +28,18 @@ class _DashboardAdminPageState extends State<DashboardAdminPage> {
 
   @override
   Widget build(BuildContext context) {
-    // StreamBuilder membungkus seluruh halaman agar data real-time
     return StreamBuilder<DocumentSnapshot>(
       stream: FirebaseFirestore.instance
           .collection('users')
           .doc(user?.uid)
           .snapshots(),
       builder: (context, snapshot) {
-        // Default nama kalau loading/error
         String namaPanggilan = "Admin";
 
         if (snapshot.hasData && snapshot.data!.exists) {
           var data = snapshot.data!.data() as Map<String, dynamic>;
-          // Ambil nama dari database, ambil kata pertama saja biar akrab
           String namaLengkap = data['nama'] ?? "Admin";
-          namaPanggilan = namaLengkap.split(" ")[0]; 
+          namaPanggilan = namaLengkap.split(" ")[0];
         }
 
         return SingleChildScrollView(
@@ -52,12 +47,12 @@ class _DashboardAdminPageState extends State<DashboardAdminPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // 1. Salam Sapaan (Dinamis + Tombol Logout)
+              // 1. Header
               Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween, // Biar logout di kanan
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text(
-                    "Halo $namaPanggilan! 👋", // <--- Berubah sesuai database
+                    "Halo $namaPanggilan! 👋",
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 22,
@@ -74,39 +69,108 @@ class _DashboardAdminPageState extends State<DashboardAdminPage> {
 
               const SizedBox(height: 24),
 
-              // 2. Bagian Antrian (Masih Statis sesuai request)
-              const Text(
-                "Antrian saat ini",
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                ),
+              // 2. Judul Section
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    "Antrian Terbaru",
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  GestureDetector(
+                    onTap: widget.onGoToAntrian,
+                    child: const Text(
+                      "Lihat Semua",
+                      style: TextStyle(
+                        color: Colors.blue,
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(height: 16),
 
-              // List Item Antrian
-              _buildQueueCard(
-                name: "Damara Rafiandriza P",
-                date: "12 Desember 2026 - 16:00 WIB",
-                isActive: true,
-              ),
-              const SizedBox(height: 12),
-              _buildQueueCard(
-                name: "Nathania Ardelia",
-                date: "12 Desember 2026 - 18:00 WIB",
-                isActive: false,
-              ),
-              const SizedBox(height: 12),
-              _buildQueueCard(
-                name: "Endah Retno Kinanti",
-                date: "13 Desember 2026 - 08:00 WIB",
-                isActive: false,
+              // 3. LIST ANTRIAN (Logic Diperbaiki)
+              StreamBuilder<QuerySnapshot>(
+                stream: FirebaseFirestore.instance
+                    .collection('bookings')
+                    .orderBy('created_at', descending: true)
+                    .limit(3)
+                    .snapshots(),
+                builder: (context, bookingSnap) {
+                  if (bookingSnap.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+
+                  if (!bookingSnap.hasData || bookingSnap.data!.docs.isEmpty) {
+                    return Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(20),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF424242),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Text(
+                        "Belum ada antrian masuk.",
+                        style: TextStyle(color: Colors.white54),
+                        textAlign: TextAlign.center,
+                      ),
+                    );
+                  }
+
+                  var docs = bookingSnap.data!.docs;
+
+                  // Kita pakai .asMap() agar bisa dapat Index (0, 1, 2)
+                  return Column(
+                    children: docs.asMap().entries.map((entry) {
+                      int index = entry.key; // Ini urutan (0 = pertama)
+                      var doc = entry.value;
+                      var data = doc.data() as Map<String, dynamic>;
+
+                      String nama = data['nama'] ?? 'Tanpa Nama';
+                      String status = data['status'] ?? 'Menunggu';
+                      String jamManual =
+                          data['jam_booking'] ?? '00:00'; // Ambil string jam
+
+                      // Format Tanggal SAJA (Tanpa Jam dari timestamp)
+                      DateTime? tgl = data['tanggal_booking'] != null
+                          ? (data['tanggal_booking'] as Timestamp).toDate()
+                          : null;
+
+                      String dateOnly = tgl != null
+                          ? DateFormat('d MMM', 'id_ID').format(tgl)
+                          : '-';
+
+                      // Gabungkan Tanggal + Jam Manual
+                      String finalDateDisplay =
+                          "$dateOnly, $jamManual WIB • $status";
+
+                      // LOGIKA WARNA BARU:
+                      // Hanya index ke-0 (paling atas) yang Hijau. Sisanya Abu-abu.
+                      bool isTopOne = (index == 0);
+
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: _buildQueueCard(
+                          name: nama,
+                          date: finalDateDisplay,
+                          isHighlight: isTopOne, // Kirim status highlight
+                        ),
+                      );
+                    }).toList(),
+                  );
+                },
               ),
 
               const SizedBox(height: 30),
 
-              // 3. Bagian Menu
+              // 4. Menu Grid
               const Text(
                 "Menu",
                 style: TextStyle(
@@ -117,18 +181,15 @@ class _DashboardAdminPageState extends State<DashboardAdminPage> {
               ),
               const SizedBox(height: 16),
 
-              // Grid Menu
               Row(
                 children: [
                   _buildMenuCard(
                     icon: Icons.calendar_month,
                     label: "Kelola Antrian",
                     onTap: () {
-                      // Panggil fungsi untuk pindah tab di parent
                       if (widget.onGoToAntrian != null) widget.onGoToAntrian!();
                     },
                   ),
-                  // Tambah menu lain di sini jika perlu
                 ],
               ),
             ],
@@ -138,16 +199,18 @@ class _DashboardAdminPageState extends State<DashboardAdminPage> {
     );
   }
 
+  // Widget Card (Diperbaiki logic warnanya)
   Widget _buildQueueCard({
     required String name,
     required String date,
-    required bool isActive,
+    required bool isHighlight, // Ganti parameter isActive jadi isHighlight
   }) {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: isActive ? const Color(0xFF4CAF50) : const Color(0xFF424242),
+        // Jika Highlight (urutan pertama) = Hijau, selain itu = Abu Gelap
+        color: isHighlight ? const Color(0xFF4CAF50) : const Color(0xFF424242),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Column(

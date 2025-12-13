@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:intl/intl.dart';
 
 class RiwayatAntrianPage extends StatefulWidget {
   const RiwayatAntrianPage({super.key});
@@ -8,22 +11,19 @@ class RiwayatAntrianPage extends StatefulWidget {
 }
 
 class RiwayatAntrianPageState extends State<RiwayatAntrianPage> {
-  int selectedTab = 0;
+  int selectedTab = 0; // 0 = Selesai, 1 = Ditolak
 
-  // --- STYLE ---
   final Color _backgroundColor = const Color(0xFF2B2B2B);
   final Color _cardColor = const Color(0xFF4A4A4A);
   final Color _popupColor = const Color(0xFF282828);
 
   @override
   Widget build(BuildContext context) {
-    // TIDAK PAKAI SCAFFOLD
     return Container(
-      color: _backgroundColor, // Background halaman
+      color: _backgroundColor,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // HEADER HALAMAN
           const Padding(
             padding: EdgeInsets.fromLTRB(18, 24, 18, 10),
             child: Text(
@@ -37,7 +37,6 @@ class RiwayatAntrianPageState extends State<RiwayatAntrianPage> {
             ),
           ),
 
-          /// TAB
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -49,22 +48,12 @@ class RiwayatAntrianPageState extends State<RiwayatAntrianPage> {
 
           const SizedBox(height: 10),
 
-          /// LIST DATA
-          Expanded(
-            child: ListView(
-              padding: const EdgeInsets.symmetric(horizontal: 18),
-              children: [
-                if (selectedTab == 0) ..._buildSelesaiList(),
-                if (selectedTab == 1) ..._buildDitolakList(),
-              ],
-            ),
-          ),
+          Expanded(child: _buildListContent()),
         ],
       ),
     );
   }
 
-  /// TAB ITEM
   Widget _buildTab(String title, int index) {
     bool active = selectedTab == index;
     return GestureDetector(
@@ -91,59 +80,84 @@ class RiwayatAntrianPageState extends State<RiwayatAntrianPage> {
     );
   }
 
-  /// LIST SELESAI
-  List<Widget> _buildSelesaiList() {
-    return [
-      _bookingCard(
-        statusColor: Colors.green,
-        statusText: "Selesai",
-        tanggal: "12 Desember 2026 - 16:00 WIB",
-        motor: "Yamaha Mio",
-        kategori: "KSG",
-        onTap: () => _detailPopupSelesai(),
-      ),
-      _bookingCard(
-        statusColor: Colors.green,
-        statusText: "Selesai",
-        tanggal: "10 Desember 2026 - 16:00 WIB",
-        motor: "Honda Beat",
-        kategori: "KSG",
-        onTap: () => _detailPopupSelesai(),
-      ),
-      _bookingCard(
-        statusColor: Colors.green,
-        statusText: "Selesai",
-        tanggal: "05 Desember 2026 - 16:00 WIB",
-        motor: "Yamaha Nmax",
-        kategori: "KSG",
-        onTap: () => _detailPopupSelesai(),
-      ),
-    ];
+  Widget _buildListContent() {
+    User? user = FirebaseAuth.instance.currentUser;
+    if (user == null) return const SizedBox();
+
+    String targetStatus = (selectedTab == 0) ? 'Selesai' : 'Ditolak';
+
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('bookings')
+          .where('uid', isEqualTo: user.uid)
+          .where('status', isEqualTo: targetStatus)
+          .orderBy('created_at', descending: true)
+          .snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(
+            child: CircularProgressIndicator(color: Colors.white),
+          );
+        }
+
+        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.history,
+                  size: 80,
+                  color: Colors.white.withOpacity(0.3),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  "Belum ada riwayat $targetStatus",
+                  style: TextStyle(color: Colors.white.withOpacity(0.5)),
+                ),
+              ],
+            ),
+          );
+        }
+
+        var documents = snapshot.data!.docs;
+
+        return ListView.builder(
+          padding: const EdgeInsets.symmetric(horizontal: 18),
+          itemCount: documents.length,
+          itemBuilder: (context, index) {
+            var data = documents[index].data() as Map<String, dynamic>;
+
+            String status = data['status'] ?? targetStatus;
+            String motor = data['jenis_kendaraan'] ?? '-';
+            String kategori = data['kategori_servis'] ?? '-';
+            String jam = data['jam_booking'] ?? '-';
+
+            DateTime? tgl = data['tanggal_booking'] != null
+                ? (data['tanggal_booking'] as Timestamp).toDate()
+                : null;
+            String tglStr = tgl != null
+                ? DateFormat('d MMMM yyyy', 'id_ID').format(tgl)
+                : '-';
+
+            Color warnaStatus = (status == 'Selesai')
+                ? Colors.green
+                : Colors.red;
+
+            return _bookingCard(
+              statusColor: warnaStatus,
+              statusText: status,
+              tanggal: "$tglStr - $jam WIB",
+              motor: motor,
+              kategori: kategori,
+              onTap: () => _showDetailPopup(context, data),
+            );
+          },
+        );
+      },
+    );
   }
 
-  /// LIST DITOLAK
-  List<Widget> _buildDitolakList() {
-    return [
-      _bookingCard(
-        statusColor: Colors.red,
-        statusText: "Ditolak",
-        tanggal: "12 Desember 2026 - 16:00 WIB",
-        motor: "Yamaha Mio",
-        kategori: "KSG",
-        onTap: () => _detailPopupDitolak(),
-      ),
-      _bookingCard(
-        statusColor: Colors.red,
-        statusText: "Ditolak",
-        tanggal: "10 Desember 2026 - 16:00 WIB",
-        motor: "Honda Beat",
-        kategori: "KSG",
-        onTap: () => _detailPopupDitolak(),
-      ),
-    ];
-  }
-
-  /// CARD STYLE
   Widget _bookingCard({
     required Color statusColor,
     required String statusText,
@@ -211,8 +225,26 @@ class RiwayatAntrianPageState extends State<RiwayatAntrianPage> {
     );
   }
 
-  /// POPUP SELESAI
-  void _detailPopupSelesai() {
+  // --- REVISI: POPUP DETAIL MENAMPILKAN ALASAN ---
+  void _showDetailPopup(BuildContext context, Map<String, dynamic> data) {
+    String status = data['status'] ?? '-';
+    String merk = data['merk_kendaraan'] ?? '-';
+    String jenis = data['jenis_kendaraan'] ?? '-';
+    String plat = data['plat_nomor'] ?? '-';
+    String kategori = data['kategori_servis'] ?? '-';
+    String kendala = data['detail_kendala'] ?? '-';
+    String jam = data['jam_booking'] ?? '-';
+    // Ambil Alasan Penolakan dari DB
+    String alasanTolak =
+        data['alasan_penolakan'] ?? 'Tidak ada alasan spesifik';
+
+    DateTime? tgl = data['tanggal_booking'] != null
+        ? (data['tanggal_booking'] as Timestamp).toDate()
+        : null;
+    String tglStr = tgl != null
+        ? DateFormat('d MMMM yyyy', 'id_ID').format(tgl)
+        : '-';
+
     showDialog(
       context: context,
       builder: (_) => Dialog(
@@ -234,69 +266,66 @@ class RiwayatAntrianPageState extends State<RiwayatAntrianPage> {
                 ),
               ),
               const SizedBox(height: 15),
-              _row("Tanggal Booking", "12 Desember 2026 - 16:00 WIB"),
-              _row("Tanggal Selesai", "12 Desember 2026 - 17:30 WIB"),
-              _row("Jenis Kendaraan", "Mio"),
-              _row("Merek Kendaraan", "Yamaha"),
-              _row("No Plat", "BM 9218 BU"),
-              _row("Kategori Servis", "KSG"),
+              _row("Tanggal", "$tglStr - $jam"),
+              _row("Kendaraan", "$merk $jenis"),
+              _row("No Plat", plat),
+              _row("Kategori", kategori),
               const SizedBox(height: 10),
-              const Text(
-                "Status : Selesai",
-                style: TextStyle(fontFamily: "Nunito", color: Colors.white),
-              ),
-              const Text(
-                "Detail Kendala : Motor saya pecah ban dan knalpot",
-                style: TextStyle(fontFamily: "Nunito", color: Colors.white),
-              ),
-              const SizedBox(height: 20),
-              _closeButton(),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
 
-  /// POPUP DITOLAK
-  void _detailPopupDitolak() {
-    showDialog(
-      context: context,
-      builder: (_) => Dialog(
-        backgroundColor: _popupColor,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        child: Container(
-          padding: const EdgeInsets.all(18),
-          height: 360,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                "Detail Booking",
+              Text(
+                "Status : $status",
                 style: TextStyle(
                   fontFamily: "Nunito",
-                  fontSize: 18,
-                  color: Colors.white,
+                  color: (status == 'Selesai') ? Colors.green : Colors.red,
                   fontWeight: FontWeight.bold,
                 ),
               ),
-              const SizedBox(height: 12),
-              _row("Tanggal Booking", "12 Desember 2026 - 16:00 WIB"),
-              _row("Jenis Kendaraan", "Mio"),
-              _row("Merek Kendaraan", "Yamaha"),
-              _row("No Plat", "BM 9218 BU"),
-              _row("Kategori Servis", "KSG"),
-              const SizedBox(height: 10),
+              const SizedBox(height: 5),
+
+              // --- TAMBAHAN BARU: ALASAN PENOLAKAN ---
+              if (status == 'Ditolak') ...[
+                const SizedBox(height: 10),
+                const Divider(color: Colors.white24),
+                const SizedBox(height: 10),
+                const Text(
+                  "Alasan Penolakan:",
+                  style: TextStyle(
+                    fontFamily: "Nunito",
+                    color: Colors.redAccent,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                Text(
+                  alasanTolak,
+                  style: const TextStyle(
+                    fontFamily: "Nunito",
+                    color: Colors.white,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                const Divider(color: Colors.white24),
+              ],
+
+              // ----------------------------------------
+              const SizedBox(height: 5),
               const Text(
-                "Status : Ditolak",
-                style: TextStyle(fontFamily: "Nunito", color: Colors.white),
+                "Detail Kendala:",
+                style: TextStyle(
+                  fontFamily: "Nunito",
+                  color: Colors.white70,
+                  fontSize: 12,
+                ),
               ),
-              const Text(
-                "Alasan Penolakan: Bengkel penuh, mohon booking ulang besok",
-                style: TextStyle(fontFamily: "Nunito", color: Colors.white),
+              Text(
+                kendala,
+                style: const TextStyle(
+                  fontFamily: "Nunito",
+                  color: Colors.white,
+                ),
               ),
-              const Spacer(),
-              _closeButton(),
+
+              const SizedBox(height: 20),
+              _closeButton(context),
             ],
           ),
         ),
@@ -304,14 +333,14 @@ class RiwayatAntrianPageState extends State<RiwayatAntrianPage> {
     );
   }
 
-  /// ROW DETAIL
   Widget _row(String title, String value) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(
-            flex: 3,
+          SizedBox(
+            width: 100,
             child: Text(
               title,
               style: const TextStyle(
@@ -320,8 +349,8 @@ class RiwayatAntrianPageState extends State<RiwayatAntrianPage> {
               ),
             ),
           ),
+          const Text(": ", style: TextStyle(color: Colors.white70)),
           Expanded(
-            flex: 4,
             child: Text(
               value,
               style: const TextStyle(fontFamily: "Nunito", color: Colors.white),
@@ -332,8 +361,7 @@ class RiwayatAntrianPageState extends State<RiwayatAntrianPage> {
     );
   }
 
-  /// BUTTON TUTUP
-  Widget _closeButton() {
+  Widget _closeButton(BuildContext context) {
     return SizedBox(
       width: double.infinity,
       child: ElevatedButton(
