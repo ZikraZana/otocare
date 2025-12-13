@@ -4,7 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 
 // ==========================================
-// MAIN SCREEN: BOOKING FORM
+// MAIN SCREEN: BOOKING FORM (FILTER OTOMATIS)
 // ==========================================
 
 class BookingFormScreen extends StatefulWidget {
@@ -17,23 +17,31 @@ class BookingFormScreen extends StatefulWidget {
 class _BookingFormScreenState extends State<BookingFormScreen> {
   final TextEditingController nameC = TextEditingController();
   final TextEditingController phoneC = TextEditingController();
-  final TextEditingController jenisC = TextEditingController();
-  final TextEditingController merkC = TextEditingController();
   final TextEditingController platC = TextEditingController();
   final TextEditingController detailC = TextEditingController();
 
+  // --- VARIABEL DROPDOWN ---
   String? selectedKategori;
+  String? selectedJenis;
+  String? selectedMerk;
+
   final List<String> kategoriList = ["KSG", "KSB", "Others"];
 
-  // List Jam (Akan di-generate otomatis & di-update statusnya)
-  List<BookingTimeSlot> jamList = [];
+  // 1. Variabel Penampung Data Master (Mentah)
+  List<Map<String, dynamic>> _masterDataKendaraan = [];
 
+  // 2. List untuk Dropdown (Akan berubah dinamis)
+  List<String> jenisList = []; // Daftar Jenis (Motor, Mobil)
+  List<String> merkList = []; // Daftar Merk (sesuai jenis yang dipilih)
+
+  // List Jam
+  List<BookingTimeSlot> jamList = [];
   String? selectedJam;
   DateTime? selectedDate;
 
   bool isFormEnabled = true;
   bool isLoading = false;
-  bool isCheckingSlots = false; // Loading saat cek ketersediaan jam
+  bool isCheckingSlots = false;
 
   // Colors
   static const Color bgColor = Color(0xFF2B2B2B);
@@ -44,14 +52,65 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
   void initState() {
     super.initState();
     _loadUserData();
-    _generateInitialTimeSlots(); // Buat jam 08:00 - 17:00
+    _generateInitialTimeSlots();
+    _fetchMasterDataKendaraan();
   }
 
-  // 1. Generate Jam 08:00 - 17:00
+  // --- LOGIC 1: AMBIL DATA & ISI JENIS ---
+  Future<void> _fetchMasterDataKendaraan() async {
+    try {
+      QuerySnapshot snapshot = await FirebaseFirestore.instance
+          .collection('data_kendaraan')
+          .get();
+
+      // Simpan semua data mentah ke variabel local
+      List<Map<String, dynamic>> rawData = [];
+      Set<String> uniqueJenis = {};
+
+      for (var doc in snapshot.docs) {
+        var data = doc.data() as Map<String, dynamic>;
+        rawData.add(data); // Simpan {jenis: "Motor", merk: "Yamaha"}
+
+        if (data['jenis'] != null) {
+          uniqueJenis.add(data['jenis']); // Ambil jenis unik saja
+        }
+      }
+
+      setState(() {
+        _masterDataKendaraan = rawData;
+        jenisList = uniqueJenis.toList()..sort(); // Isi dropdown Jenis
+      });
+    } catch (e) {
+      print("Gagal ambil master data: $e");
+    }
+  }
+
+  // --- LOGIC 2: FILTER MERK BERDASARKAN JENIS ---
+  void _onJenisChanged(String? jenisBaru) {
+    if (jenisBaru == null) return;
+
+    setState(() {
+      selectedJenis = jenisBaru;
+
+      // Reset Merk karena Jenis berubah (cegah bug Mobil tapi merk Yamaha)
+      selectedMerk = null;
+
+      // Filter Merk yang sesuai dengan Jenis yang dipilih
+      Set<String> filteredMerk = {};
+      for (var item in _masterDataKendaraan) {
+        if (item['jenis'] == jenisBaru && item['merk'] != null) {
+          filteredMerk.add(item['merk']);
+        }
+      }
+
+      merkList = filteredMerk.toList()..sort();
+    });
+  }
+
   void _generateInitialTimeSlots() {
     List<BookingTimeSlot> temp = [];
     for (int i = 8; i <= 17; i++) {
-      String timeStr = "${i.toString().padLeft(2, '0')}:00"; // Format 08:00
+      String timeStr = "${i.toString().padLeft(2, '0')}:00";
       temp.add(BookingTimeSlot(time: timeStr, isAvailable: true));
     }
     setState(() {
@@ -59,7 +118,6 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
     });
   }
 
-  // 2. Ambil Data User (Nama & HP)
   void _loadUserData() async {
     User? user = FirebaseAuth.instance.currentUser;
     if (user != null) {
@@ -81,23 +139,19 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
     }
   }
 
-  // 3. LOGIC UTAMA: Cek Ketersediaan Jam di Firestore
   Future<void> _checkAvailability(DateTime date) async {
     setState(() {
       isCheckingSlots = true;
-      selectedJam = null; // Reset pilihan jam kalau ganti tanggal
-      // Reset semua jam jadi Available dulu
+      selectedJam = null;
       for (var slot in jamList) {
         slot.isAvailable = true;
       }
     });
 
     try {
-      // Buat range tanggal (Mulai 00:00 sampai 23:59 di hari yang dipilih)
       DateTime startOfDay = DateTime(date.year, date.month, date.day);
       DateTime endOfDay = startOfDay.add(const Duration(days: 1));
 
-      // Query ke Firestore
       QuerySnapshot snapshot = await FirebaseFirestore.instance
           .collection('bookings')
           .where(
@@ -107,23 +161,20 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
           .where('tanggal_booking', isLessThan: Timestamp.fromDate(endOfDay))
           .get();
 
-      // Loop hasil query
       List<String> bookedTimes = [];
       for (var doc in snapshot.docs) {
         var data = doc.data() as Map<String, dynamic>;
-        // Kalau statusnya DITOLAK, jamnya tetap dianggap kosong (available)
-        if (data['status'] == 'Ditolak') continue;
-
+        if (data['status'] == 'Ditolak' || data['status'] == 'Dibatalkan')
+          continue;
         if (data['jam_booking'] != null) {
           bookedTimes.add(data['jam_booking']);
         }
       }
 
-      // Update jamList berdasarkan hasil query
       setState(() {
         for (var slot in jamList) {
           if (bookedTimes.contains(slot.time)) {
-            slot.isAvailable = false; // Tandai penuh
+            slot.isAvailable = false;
           }
         }
         isCheckingSlots = false;
@@ -134,13 +185,12 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
     }
   }
 
-  // 4. Kirim Booking
   Future<void> _submitBooking() async {
     if (selectedDate == null ||
         selectedJam == null ||
         selectedKategori == null ||
-        jenisC.text.isEmpty ||
-        merkC.text.isEmpty ||
+        selectedJenis == null ||
+        selectedMerk == null ||
         platC.text.isEmpty ||
         detailC.text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -162,8 +212,8 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
         'uid': user.uid,
         'nama': nameC.text,
         'no_hp': phoneC.text,
-        'jenis_kendaraan': jenisC.text,
-        'merk_kendaraan': merkC.text,
+        'jenis_kendaraan': selectedJenis,
+        'merk_kendaraan': selectedMerk,
         'plat_nomor': platC.text,
         'kategori_servis': selectedKategori,
         'detail_kendala': detailC.text,
@@ -181,15 +231,15 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
           ),
         );
         setState(() {
-          jenisC.clear();
-          merkC.clear();
           platC.clear();
           detailC.clear();
           selectedJam = null;
           selectedDate = null;
           selectedKategori = null;
+          selectedJenis = null;
+          selectedMerk = null;
           isLoading = false;
-          _generateInitialTimeSlots(); // Reset jam
+          _generateInitialTimeSlots();
         });
       }
     } catch (e) {
@@ -244,12 +294,10 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
             ),
             const SizedBox(height: 20),
 
-            // DATE PICKER
             DatePickerField(
               selectedDate: selectedDate,
               onDateSelected: (date) {
                 setState(() => selectedDate = date);
-                // Saat tanggal dipilih, langsung cek jam kosong/penuh
                 _checkAvailability(date);
               },
               label: 'Tanggal Booking',
@@ -257,7 +305,6 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
             ),
             const SizedBox(height: 22),
 
-            // TIME SELECTOR (Loading indicator jika sedang cek)
             if (isCheckingSlots)
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 20),
@@ -270,28 +317,40 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
                 timeSlots: jamList,
                 selectedTime: selectedJam,
                 onTimeSelected: (time) => setState(() => selectedJam = time),
-                enabled:
-                    isFormEnabled &&
-                    selectedDate != null, // Harus pilih tanggal dulu
+                enabled: isFormEnabled && selectedDate != null,
                 label: selectedDate == null
                     ? 'Pilih Jam (Pilih tanggal dahulu)'
                     : 'Pilih Jam',
               ),
 
             const SizedBox(height: 22),
-            CustomTextField(
-              controller: jenisC,
+
+            // --- DROPDOWN JENIS (Memanggil Fungsi Filter) ---
+            CustomDropdown(
+              value: selectedJenis,
+              items: jenisList,
+              // Saat jenis dipilih, jalankan _onJenisChanged
+              onChanged: isFormEnabled ? _onJenisChanged : null,
               label: 'Jenis Kendaraan',
-              hint: 'Motor / Mobil',
+              hint: 'Pilih Jenis (Motor/Mobil)',
               enabled: isFormEnabled,
             ),
             const SizedBox(height: 14),
-            CustomTextField(
-              controller: merkC,
+
+            // --- DROPDOWN MERK (Dinamis) ---
+            CustomDropdown(
+              value: selectedMerk,
+              items: merkList,
+              onChanged: (v) => setState(() => selectedMerk = v),
               label: 'Merk Kendaraan',
-              hint: 'Contoh: Yamaha',
-              enabled: isFormEnabled,
+              // Hint berubah kalau belum pilih jenis
+              hint: selectedJenis == null
+                  ? 'Pilih Jenis Kendaraan dulu'
+                  : 'Pilih Merk',
+              // Disable kalau belum pilih jenis
+              enabled: isFormEnabled && selectedJenis != null,
             ),
+
             const SizedBox(height: 14),
             CustomTextField(
               controller: platC,
@@ -380,12 +439,10 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
 
 class BookingTimeSlot {
   final String time;
-  bool isAvailable; // Tidak final, agar bisa diubah
-
+  bool isAvailable;
   BookingTimeSlot({required this.time, this.isAvailable = true});
 }
 
-// Widget Time Selector (Update Tampilan Penuh)
 class BookingTimeSelector extends StatelessWidget {
   final List<BookingTimeSlot> timeSlots;
   final String? selectedTime;
@@ -439,7 +496,6 @@ class BookingTimeSelector extends StatelessWidget {
                 final slot = timeSlots[index];
                 final isSelected = selectedTime == slot.time;
                 final canSelect = enabled && slot.isAvailable;
-
                 return Padding(
                   padding: EdgeInsets.only(
                     right: index < timeSlots.length - 1 ? 6 : 0,
@@ -504,7 +560,7 @@ class BookingTimeSelector extends StatelessWidget {
   }
 
   Color _getBackgroundColor(bool isSelected, bool isAvailable) {
-    if (!isAvailable) return unavailableColor; // Warna Gelap kalau Penuh
+    if (!isAvailable) return unavailableColor;
     if (isSelected) return blueButton;
     return availableColor;
   }
@@ -515,14 +571,11 @@ class BookingTimeSelector extends StatelessWidget {
   }
 
   String _getStatusText(bool isSelected, bool isAvailable) {
-    if (!isAvailable) return 'Penuh'; // Text Penuh
+    if (!isAvailable) return 'Penuh';
     if (isSelected) return 'Dipilih';
     return 'Tersedia';
   }
 }
-
-// === WIDGET LAINNYA (Popup, DatePicker, Dropdown, Textfield) TETAP SAMA SEPERTI SEBELUMNYA ===
-// Copas ulang bagian Helper Widget dari file sebelumnya agar tidak error karena class BookingTimeSlot di atas saya ubah
 
 class PopupKonfirmasi extends StatelessWidget {
   final String title;
@@ -626,7 +679,6 @@ class DatePickerField extends StatelessWidget {
     String displayText = selectedDate != null
         ? "${selectedDate!.day.toString().padLeft(2, '0')}-${selectedDate!.month.toString().padLeft(2, '0')}-${selectedDate!.year}"
         : '';
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -720,6 +772,11 @@ class CustomDropdown extends StatelessWidget {
               value: value,
               isExpanded: true,
               dropdownColor: Colors.white,
+              // Ubah warna icon jika disabled biar terlihat jelas
+              icon: Icon(
+                Icons.keyboard_arrow_down,
+                color: enabled ? Colors.black : Colors.white24,
+              ),
               items: items
                   .map(
                     (item) => DropdownMenuItem(
@@ -737,7 +794,7 @@ class CustomDropdown extends StatelessWidget {
                 style: TextStyle(
                   color: enabled
                       ? Colors.black.withOpacity(0.5)
-                      : Colors.white60,
+                      : Colors.white24,
                 ),
               ),
             ),
