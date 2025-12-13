@@ -11,7 +11,7 @@ class RiwayatAntrianPage extends StatefulWidget {
 }
 
 class RiwayatAntrianPageState extends State<RiwayatAntrianPage> {
-  int selectedTab = 0; // 0 = Selesai, 1 = Ditolak
+  int selectedTab = 0; // 0 = Selesai, 1 = Ditolak/Batal
 
   final Color _backgroundColor = const Color(0xFF2B2B2B);
   final Color _cardColor = const Color(0xFF4A4A4A);
@@ -36,18 +36,16 @@ class RiwayatAntrianPageState extends State<RiwayatAntrianPage> {
               ),
             ),
           ),
-
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               _buildTab("Selesai", 0),
               const SizedBox(width: 30),
-              _buildTab("Ditolak", 1),
+              // Kita ubah labelnya jadi lebih umum
+              _buildTab("Ditolak / Batal", 1),
             ],
           ),
-
           const SizedBox(height: 10),
-
           Expanded(child: _buildListContent()),
         ],
       ),
@@ -84,13 +82,24 @@ class RiwayatAntrianPageState extends State<RiwayatAntrianPage> {
     User? user = FirebaseAuth.instance.currentUser;
     if (user == null) return const SizedBox();
 
-    String targetStatus = (selectedTab == 0) ? 'Selesai' : 'Ditolak';
+    // Logic Tab
+    // Tab 0 -> Cari 'Selesai'
+    // Tab 1 -> Cari 'Ditolak' ATAU 'Dibatalkan'
+    // Karena Firestore 'whereIn' maksimal 10, kita bisa pakai itu untuk Tab 1.
+
+    // Siapkan List Status target
+    List<String> statusFilter = (selectedTab == 0)
+        ? ['Selesai']
+        : ['Ditolak', 'Dibatalkan'];
 
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance
           .collection('bookings')
           .where('uid', isEqualTo: user.uid)
-          .where('status', isEqualTo: targetStatus)
+          .where(
+            'status',
+            whereIn: statusFilter,
+          ) // Pakai whereIn biar bisa multiple status
           .orderBy('created_at', descending: true)
           .snapshots(),
       builder: (context, snapshot) {
@@ -112,7 +121,9 @@ class RiwayatAntrianPageState extends State<RiwayatAntrianPage> {
                 ),
                 const SizedBox(height: 10),
                 Text(
-                  "Belum ada riwayat $targetStatus",
+                  (selectedTab == 0)
+                      ? "Belum ada riwayat Selesai"
+                      : "Belum ada riwayat Ditolak/Batal",
                   style: TextStyle(color: Colors.white.withOpacity(0.5)),
                 ),
               ],
@@ -128,11 +139,10 @@ class RiwayatAntrianPageState extends State<RiwayatAntrianPage> {
           itemBuilder: (context, index) {
             var data = documents[index].data() as Map<String, dynamic>;
 
-            String status = data['status'] ?? targetStatus;
+            String status = data['status'] ?? '-';
             String motor = data['jenis_kendaraan'] ?? '-';
             String kategori = data['kategori_servis'] ?? '-';
             String jam = data['jam_booking'] ?? '-';
-
             DateTime? tgl = data['tanggal_booking'] != null
                 ? (data['tanggal_booking'] as Timestamp).toDate()
                 : null;
@@ -140,9 +150,10 @@ class RiwayatAntrianPageState extends State<RiwayatAntrianPage> {
                 ? DateFormat('d MMMM yyyy', 'id_ID').format(tgl)
                 : '-';
 
-            Color warnaStatus = (status == 'Selesai')
-                ? Colors.green
-                : Colors.red;
+            // Warna: Selesai=Hijau, Ditolak=Merah, Dibatalkan=Abu-abu/Merah Gelap
+            Color warnaStatus = Colors.green;
+            if (status == 'Ditolak') warnaStatus = Colors.red;
+            if (status == 'Dibatalkan') warnaStatus = Colors.grey;
 
             return _bookingCard(
               statusColor: warnaStatus,
@@ -194,7 +205,6 @@ class RiwayatAntrianPageState extends State<RiwayatAntrianPage> {
               ),
             ),
             const SizedBox(height: 10),
-
             Text(
               tanggal,
               style: const TextStyle(
@@ -225,7 +235,6 @@ class RiwayatAntrianPageState extends State<RiwayatAntrianPage> {
     );
   }
 
-  // --- REVISI: POPUP DETAIL MENAMPILKAN ALASAN ---
   void _showDetailPopup(BuildContext context, Map<String, dynamic> data) {
     String status = data['status'] ?? '-';
     String merk = data['merk_kendaraan'] ?? '-';
@@ -234,7 +243,6 @@ class RiwayatAntrianPageState extends State<RiwayatAntrianPage> {
     String kategori = data['kategori_servis'] ?? '-';
     String kendala = data['detail_kendala'] ?? '-';
     String jam = data['jam_booking'] ?? '-';
-    // Ambil Alasan Penolakan dari DB
     String alasanTolak =
         data['alasan_penolakan'] ?? 'Tidak ada alasan spesifik';
 
@@ -244,6 +252,11 @@ class RiwayatAntrianPageState extends State<RiwayatAntrianPage> {
     String tglStr = tgl != null
         ? DateFormat('d MMMM yyyy', 'id_ID').format(tgl)
         : '-';
+
+    // Warna status di popup
+    Color statusColor = Colors.green;
+    if (status == 'Ditolak') statusColor = Colors.red;
+    if (status == 'Dibatalkan') statusColor = Colors.grey;
 
     showDialog(
       context: context,
@@ -276,19 +289,19 @@ class RiwayatAntrianPageState extends State<RiwayatAntrianPage> {
                 "Status : $status",
                 style: TextStyle(
                   fontFamily: "Nunito",
-                  color: (status == 'Selesai') ? Colors.green : Colors.red,
+                  color: statusColor,
                   fontWeight: FontWeight.bold,
                 ),
               ),
               const SizedBox(height: 5),
 
-              // --- TAMBAHAN BARU: ALASAN PENOLAKAN ---
-              if (status == 'Ditolak') ...[
+              // Tampilkan Alasan jika Ditolak ATAU Dibatalkan
+              if (status == 'Ditolak' || status == 'Dibatalkan') ...[
                 const SizedBox(height: 10),
                 const Divider(color: Colors.white24),
                 const SizedBox(height: 10),
                 const Text(
-                  "Alasan Penolakan:",
+                  "Alasan / Keterangan:",
                   style: TextStyle(
                     fontFamily: "Nunito",
                     color: Colors.redAccent,
@@ -306,7 +319,6 @@ class RiwayatAntrianPageState extends State<RiwayatAntrianPage> {
                 const Divider(color: Colors.white24),
               ],
 
-              // ----------------------------------------
               const SizedBox(height: 5),
               const Text(
                 "Detail Kendala:",
@@ -323,7 +335,6 @@ class RiwayatAntrianPageState extends State<RiwayatAntrianPage> {
                   color: Colors.white,
                 ),
               ),
-
               const SizedBox(height: 20),
               _closeButton(context),
             ],

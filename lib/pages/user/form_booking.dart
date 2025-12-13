@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart'; // 1. Import Firestore
-import 'package:firebase_auth/firebase_auth.dart'; // 2. Import Auth
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:intl/intl.dart';
 
 // ==========================================
 // MAIN SCREEN: BOOKING FORM
@@ -24,24 +25,15 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
   String? selectedKategori;
   final List<String> kategoriList = ["KSG", "KSB", "Others"];
 
-  final List<BookingTimeSlot> jamList = [
-    BookingTimeSlot(time: "08:00", isAvailable: true),
-    BookingTimeSlot(
-      time: "10:00",
-      isAvailable: true,
-    ), // Ubah availability sesuai kebutuhan
-    BookingTimeSlot(time: "12:00", isAvailable: true),
-    BookingTimeSlot(time: "14:00", isAvailable: true),
-    BookingTimeSlot(time: "16:00", isAvailable: true),
-    BookingTimeSlot(time: "18:00", isAvailable: true),
-  ];
+  // List Jam (Akan di-generate otomatis & di-update statusnya)
+  List<BookingTimeSlot> jamList = [];
 
   String? selectedJam;
   DateTime? selectedDate;
-  bool isFormEnabled = true;
 
-  // --- TAMBAHAN BARU: Loading State ---
+  bool isFormEnabled = true;
   bool isLoading = false;
+  bool isCheckingSlots = false; // Loading saat cek ketersediaan jam
 
   // Colors
   static const Color bgColor = Color(0xFF2B2B2B);
@@ -51,11 +43,23 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
   @override
   void initState() {
     super.initState();
-    // --- TAMBAHAN BARU: Ambil data user saat halaman dibuka ---
     _loadUserData();
+    _generateInitialTimeSlots(); // Buat jam 08:00 - 17:00
   }
 
-  // --- TAMBAHAN BARU: Fungsi Ambil Data User (Nama & HP) ---
+  // 1. Generate Jam 08:00 - 17:00
+  void _generateInitialTimeSlots() {
+    List<BookingTimeSlot> temp = [];
+    for (int i = 8; i <= 17; i++) {
+      String timeStr = "${i.toString().padLeft(2, '0')}:00"; // Format 08:00
+      temp.add(BookingTimeSlot(time: timeStr, isAvailable: true));
+    }
+    setState(() {
+      jamList = temp;
+    });
+  }
+
+  // 2. Ambil Data User (Nama & HP)
   void _loadUserData() async {
     User? user = FirebaseAuth.instance.currentUser;
     if (user != null) {
@@ -67,7 +71,6 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
 
         if (userDoc.exists && mounted) {
           setState(() {
-            // Isi controller Nama dan HP otomatis
             nameC.text = userDoc['nama'] ?? '';
             phoneC.text = userDoc['nomor_hp'] ?? '';
           });
@@ -78,9 +81,61 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
     }
   }
 
-  // --- TAMBAHAN BARU: Fungsi Kirim Booking ke Firestore ---
+  // 3. LOGIC UTAMA: Cek Ketersediaan Jam di Firestore
+  Future<void> _checkAvailability(DateTime date) async {
+    setState(() {
+      isCheckingSlots = true;
+      selectedJam = null; // Reset pilihan jam kalau ganti tanggal
+      // Reset semua jam jadi Available dulu
+      for (var slot in jamList) {
+        slot.isAvailable = true;
+      }
+    });
+
+    try {
+      // Buat range tanggal (Mulai 00:00 sampai 23:59 di hari yang dipilih)
+      DateTime startOfDay = DateTime(date.year, date.month, date.day);
+      DateTime endOfDay = startOfDay.add(const Duration(days: 1));
+
+      // Query ke Firestore
+      QuerySnapshot snapshot = await FirebaseFirestore.instance
+          .collection('bookings')
+          .where(
+            'tanggal_booking',
+            isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay),
+          )
+          .where('tanggal_booking', isLessThan: Timestamp.fromDate(endOfDay))
+          .get();
+
+      // Loop hasil query
+      List<String> bookedTimes = [];
+      for (var doc in snapshot.docs) {
+        var data = doc.data() as Map<String, dynamic>;
+        // Kalau statusnya DITOLAK, jamnya tetap dianggap kosong (available)
+        if (data['status'] == 'Ditolak') continue;
+
+        if (data['jam_booking'] != null) {
+          bookedTimes.add(data['jam_booking']);
+        }
+      }
+
+      // Update jamList berdasarkan hasil query
+      setState(() {
+        for (var slot in jamList) {
+          if (bookedTimes.contains(slot.time)) {
+            slot.isAvailable = false; // Tandai penuh
+          }
+        }
+        isCheckingSlots = false;
+      });
+    } catch (e) {
+      print("Error checking slots: $e");
+      setState(() => isCheckingSlots = false);
+    }
+  }
+
+  // 4. Kirim Booking
   Future<void> _submitBooking() async {
-    // 1. Validasi Input
     if (selectedDate == null ||
         selectedJam == null ||
         selectedKategori == null ||
@@ -103,33 +158,28 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
       User? user = FirebaseAuth.instance.currentUser;
       if (user == null) return;
 
-      // 2. Kirim ke Database
       await FirebaseFirestore.instance.collection('bookings').add({
         'uid': user.uid,
-        'nama': nameC.text, // Dari controller yg sudah terisi otomatis
-        'no_hp': phoneC.text, // Dari controller yg sudah terisi otomatis
+        'nama': nameC.text,
+        'no_hp': phoneC.text,
         'jenis_kendaraan': jenisC.text,
         'merk_kendaraan': merkC.text,
         'plat_nomor': platC.text,
         'kategori_servis': selectedKategori,
         'detail_kendala': detailC.text,
-        'tanggal_booking': Timestamp.fromDate(
-          selectedDate!,
-        ), // Simpan sbg Timestamp
+        'tanggal_booking': Timestamp.fromDate(selectedDate!),
         'jam_booking': selectedJam,
-        'status': 'Menunggu', // Status awal
+        'status': 'Menunggu',
         'created_at': FieldValue.serverTimestamp(),
       });
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text("Booking Berhasil! Menunggu konfirmasi admin."),
+            content: Text("Booking Berhasil!"),
             backgroundColor: Colors.green,
           ),
         );
-
-        // 3. Reset Form setelah sukses
         setState(() {
           jenisC.clear();
           merkC.clear();
@@ -139,30 +189,17 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
           selectedDate = null;
           selectedKategori = null;
           isLoading = false;
+          _generateInitialTimeSlots(); // Reset jam
         });
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text("Gagal Booking: $e"),
-            backgroundColor: Colors.red,
-          ),
+          SnackBar(content: Text("Gagal: $e"), backgroundColor: Colors.red),
         );
         setState(() => isLoading = false);
       }
     }
-  }
-
-  @override
-  void dispose() {
-    nameC.dispose();
-    phoneC.dispose();
-    jenisC.dispose();
-    merkC.dispose();
-    platC.dispose();
-    detailC.dispose();
-    super.dispose();
   }
 
   @override
@@ -174,7 +211,6 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // --- HEADER CUSTOM ---
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -200,30 +236,47 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
             ),
             const SizedBox(height: 20),
 
-            // ---------------------
             CustomTextField(
               controller: nameC,
               label: 'Nama',
-              hint: 'Loading...', // Ubah hint biar tau lagi loading
               useGrayFill: true,
-              enabled: false, // Tetap false karena ambil dari DB
+              enabled: false,
             ),
             const SizedBox(height: 20),
+
+            // DATE PICKER
             DatePickerField(
               selectedDate: selectedDate,
-              onDateSelected: (date) => setState(() => selectedDate = date),
+              onDateSelected: (date) {
+                setState(() => selectedDate = date);
+                // Saat tanggal dipilih, langsung cek jam kosong/penuh
+                _checkAvailability(date);
+              },
               label: 'Tanggal Booking',
               hint: 'Pilih tanggal',
             ),
             const SizedBox(height: 22),
 
-            BookingTimeSelector(
-              timeSlots: jamList,
-              selectedTime: selectedJam,
-              onTimeSelected: (time) => setState(() => selectedJam = time),
-              enabled: isFormEnabled,
-              label: 'Pilih Jam',
-            ),
+            // TIME SELECTOR (Loading indicator jika sedang cek)
+            if (isCheckingSlots)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 20),
+                child: Center(
+                  child: CircularProgressIndicator(color: blueButton),
+                ),
+              )
+            else
+              BookingTimeSelector(
+                timeSlots: jamList,
+                selectedTime: selectedJam,
+                onTimeSelected: (time) => setState(() => selectedJam = time),
+                enabled:
+                    isFormEnabled &&
+                    selectedDate != null, // Harus pilih tanggal dulu
+                label: selectedDate == null
+                    ? 'Pilih Jam (Pilih tanggal dahulu)'
+                    : 'Pilih Jam',
+              ),
 
             const SizedBox(height: 22),
             CustomTextField(
@@ -250,10 +303,8 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
             CustomTextField(
               controller: phoneC,
               label: 'No Handphone',
-              hint: 'Loading...',
               useGrayFill: true,
-              keyboard: TextInputType.phone,
-              enabled: false, // Tetap false
+              enabled: false,
             ),
             const SizedBox(height: 14),
             CustomDropdown(
@@ -273,10 +324,10 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
               enabled: isFormEnabled,
             ),
             const SizedBox(height: 22),
+
             SizedBox(
               width: double.infinity,
               child: ElevatedButton(
-                // --- MODIFIKASI: Disable tombol saat loading ---
                 onPressed: (isFormEnabled && !isLoading)
                     ? () {
                         showDialog(
@@ -284,11 +335,7 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
                           builder: (_) => PopupKonfirmasi(
                             title:
                                 'Apakah Kamu Yakin Ingin Melakukan Booking Servis?',
-                            // --- MODIFIKASI: Panggil fungsi submit ---
-                            onConfirm: () {
-                              // Logic dipanggil di sini setelah user klik "Iya"
-                              _submitBooking();
-                            },
+                            onConfirm: () => _submitBooking(),
                           ),
                         );
                       }
@@ -328,235 +375,17 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
 }
 
 // ==========================================
-// HELPER WIDGETS
+// HELPER MODELS & WIDGETS
 // ==========================================
-
-class PopupKonfirmasi extends StatelessWidget {
-  final String title;
-  final VoidCallback? onConfirm;
-  final VoidCallback? onCancel;
-  final String confirmText;
-  final String cancelText;
-
-  const PopupKonfirmasi({
-    super.key,
-    required this.title,
-    this.onConfirm,
-    this.onCancel,
-    this.confirmText = 'Iya',
-    this.cancelText = 'Tidak',
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Dialog(
-      backgroundColor: Colors.transparent,
-      child: Container(
-        padding: const EdgeInsets.all(24),
-        decoration: BoxDecoration(
-          color: const Color(0xFF2B2B2B),
-          borderRadius: BorderRadius.circular(20),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.3),
-              blurRadius: 20,
-              offset: const Offset(0, 10),
-            ),
-          ],
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              title,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w600,
-                color: Colors.white,
-                height: 1.4,
-              ),
-            ),
-            const SizedBox(height: 24),
-            Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: () {
-                      Navigator.pop(context);
-                      if (onCancel != null) onCancel!();
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.grey[700],
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      elevation: 0,
-                    ),
-                    child: Text(
-                      cancelText,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: () {
-                      Navigator.pop(context); // Tutup dialog dulu
-                      if (onConfirm != null)
-                        onConfirm!(); // Baru jalankan fungsi
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color.fromARGB(255, 217, 57, 57),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      elevation: 0,
-                    ),
-                    child: Text(
-                      confirmText,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ... SISA WIDGET BAWAHNYA (DatePickerField, BookingTimeSelector, CustomDropdown, CustomTextField)
-// ... TIDAK PERLU DIUBAH, BIARKAN SAMA SEPERTI KODE LAMA KAMU
-// ... Paste ulang Helper Widget sisanya di sini kalau mau file lengkap satu blok,
-// ... Tapi yang penting diubah hanya CLASS BookingFormScreen & PopupKonfirmasi saja.
-
-class DatePickerField extends StatelessWidget {
-  final DateTime? selectedDate;
-  final ValueChanged<DateTime> onDateSelected;
-  final String hint;
-  final String? label;
-
-  const DatePickerField({
-    super.key,
-    this.selectedDate,
-    required this.onDateSelected,
-    this.hint = 'Pilih tanggal',
-    this.label,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    String displayText = selectedDate != null
-        ? "${selectedDate!.day.toString().padLeft(2, '0')}-${selectedDate!.month.toString().padLeft(2, '0')}-${selectedDate!.year}"
-        : '';
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (label != null) ...[
-          Text(
-            label!,
-            style: const TextStyle(color: Colors.white, fontSize: 14),
-          ),
-          const SizedBox(height: 8),
-        ],
-        GestureDetector(
-          onTap: () async {
-            DateTime? picked = await showDatePicker(
-              context: context,
-              initialDate: selectedDate ?? DateTime.now(),
-              firstDate: DateTime.now(),
-              lastDate: DateTime.now().add(const Duration(days: 30)),
-              builder: (context, child) {
-                return Theme(
-                  data: ThemeData.dark().copyWith(
-                    colorScheme: const ColorScheme.dark(
-                      primary: Color(0xFF3991D9),
-                      onPrimary: Colors.white,
-                      surface: Color(0xFF2B2B2B),
-                      onSurface: Colors.white,
-                    ),
-                    textButtonTheme: TextButtonThemeData(
-                      style: TextButton.styleFrom(
-                        foregroundColor: const Color(0xFF3991D9),
-                      ),
-                    ),
-                    dialogTheme: const DialogThemeData(
-                      backgroundColor: Color(0xFF2B2B2B),
-                    ),
-                  ),
-                  child: child!,
-                );
-              },
-            );
-
-            if (picked != null) {
-              onDateSelected(picked);
-            }
-          },
-          child: AbsorbPointer(
-            child: TextField(
-              controller: TextEditingController(text: displayText),
-              style: const TextStyle(color: Colors.black),
-              decoration: InputDecoration(
-                hintText: hint,
-                hintStyle: TextStyle(color: Colors.black.withOpacity(0.5)),
-                filled: true,
-                fillColor: Colors.white,
-                prefixIcon: const Icon(
-                  Icons.calendar_today,
-                  color: Color(0xFF3991D9),
-                  size: 20,
-                ),
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 12,
-                ),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide(color: Colors.grey.shade300),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide(color: Colors.grey.shade300),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: const BorderSide(
-                    color: Color(0xFF3991D9),
-                    width: 1.5,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
 
 class BookingTimeSlot {
   final String time;
-  final bool isAvailable;
+  bool isAvailable; // Tidak final, agar bisa diubah
 
   BookingTimeSlot({required this.time, this.isAvailable = true});
 }
 
+// Widget Time Selector (Update Tampilan Penuh)
 class BookingTimeSelector extends StatelessWidget {
   final List<BookingTimeSlot> timeSlots;
   final String? selectedTime;
@@ -675,31 +504,178 @@ class BookingTimeSelector extends StatelessWidget {
   }
 
   Color _getBackgroundColor(bool isSelected, bool isAvailable) {
-    if (isSelected && isAvailable) {
-      return blueButton;
-    } else if (!isAvailable) {
-      return unavailableColor;
-    } else {
-      return availableColor;
-    }
+    if (!isAvailable) return unavailableColor; // Warna Gelap kalau Penuh
+    if (isSelected) return blueButton;
+    return availableColor;
   }
 
   Color _getTextColor(bool isSelected, bool isAvailable, bool enabled) {
-    if (!enabled) {
-      return textColor.withOpacity(0.3);
-    } else {
-      return textColor;
-    }
+    if (!enabled || !isAvailable) return textColor.withOpacity(0.3);
+    return textColor;
   }
 
   String _getStatusText(bool isSelected, bool isAvailable) {
-    if (isSelected && isAvailable) {
-      return 'Dipilih';
-    } else if (!isAvailable) {
-      return 'Tidak Tersedia';
-    } else {
-      return 'Tersedia';
-    }
+    if (!isAvailable) return 'Penuh'; // Text Penuh
+    if (isSelected) return 'Dipilih';
+    return 'Tersedia';
+  }
+}
+
+// === WIDGET LAINNYA (Popup, DatePicker, Dropdown, Textfield) TETAP SAMA SEPERTI SEBELUMNYA ===
+// Copas ulang bagian Helper Widget dari file sebelumnya agar tidak error karena class BookingTimeSlot di atas saya ubah
+
+class PopupKonfirmasi extends StatelessWidget {
+  final String title;
+  final VoidCallback? onConfirm;
+  final VoidCallback? onCancel;
+
+  const PopupKonfirmasi({
+    super.key,
+    required this.title,
+    this.onConfirm,
+    this.onCancel,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      child: Container(
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(
+          color: const Color(0xFF2B2B2B),
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(color: Colors.black.withOpacity(0.3), blurRadius: 20),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              title,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+                color: Colors.white,
+              ),
+            ),
+            const SizedBox(height: 24),
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.pop(context),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.grey[700],
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: const Text(
+                      'Tidak',
+                      style: TextStyle(color: Colors.white),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      if (onConfirm != null) onConfirm!();
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFD52C2C),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: const Text(
+                      'Iya',
+                      style: TextStyle(color: Colors.white),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class DatePickerField extends StatelessWidget {
+  final DateTime? selectedDate;
+  final ValueChanged<DateTime> onDateSelected;
+  final String hint;
+  final String? label;
+
+  const DatePickerField({
+    super.key,
+    this.selectedDate,
+    required this.onDateSelected,
+    this.hint = 'Pilih tanggal',
+    this.label,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    String displayText = selectedDate != null
+        ? "${selectedDate!.day.toString().padLeft(2, '0')}-${selectedDate!.month.toString().padLeft(2, '0')}-${selectedDate!.year}"
+        : '';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (label != null) ...[
+          Text(
+            label!,
+            style: const TextStyle(color: Colors.white, fontSize: 14),
+          ),
+          const SizedBox(height: 8),
+        ],
+        GestureDetector(
+          onTap: () async {
+            DateTime? picked = await showDatePicker(
+              context: context,
+              initialDate: selectedDate ?? DateTime.now(),
+              firstDate: DateTime.now(),
+              lastDate: DateTime.now().add(const Duration(days: 30)),
+              builder: (context, child) =>
+                  Theme(data: ThemeData.dark(), child: child!),
+            );
+            if (picked != null) onDateSelected(picked);
+          },
+          child: AbsorbPointer(
+            child: TextField(
+              controller: TextEditingController(text: displayText),
+              style: const TextStyle(color: Colors.black),
+              decoration: InputDecoration(
+                hintText: hint,
+                hintStyle: TextStyle(color: Colors.black.withOpacity(0.5)),
+                filled: true,
+                fillColor: Colors.white,
+                prefixIcon: const Icon(
+                  Icons.calendar_today,
+                  color: Color(0xFF3991D9),
+                  size: 20,
+                ),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 12,
+                ),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
   }
 }
 
@@ -710,10 +686,6 @@ class CustomDropdown extends StatelessWidget {
   final String? label;
   final String hint;
   final bool enabled;
-  final Widget? prefixIcon;
-
-  static const Color bgColor = Color(0xFF2B2B2B);
-  static const Color textColor = Color(0xFFFAFAFA);
 
   const CustomDropdown({
     super.key,
@@ -723,7 +695,6 @@ class CustomDropdown extends StatelessWidget {
     this.label,
     this.hint = 'Pilih',
     this.enabled = true,
-    this.prefixIcon,
   });
 
   @override
@@ -732,60 +703,44 @@ class CustomDropdown extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (label != null) ...[
-          Text(label!, style: TextStyle(color: textColor, fontSize: 14)),
+          Text(
+            label!,
+            style: const TextStyle(color: Color(0xFFFAFAFA), fontSize: 14),
+          ),
           const SizedBox(height: 8),
         ],
         Container(
-          width: double.infinity,
           padding: const EdgeInsets.symmetric(horizontal: 12),
           decoration: BoxDecoration(
-            color: enabled ? Colors.white : bgColor,
+            color: enabled ? Colors.white : const Color(0xFF2B2B2B),
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: enabled ? Colors.grey.shade300 : Colors.grey.shade700,
-              width: 1,
-            ),
           ),
-          child: Row(
-            children: [
-              if (prefixIcon != null) ...[
-                prefixIcon!,
-                const SizedBox(width: 8),
-              ],
-              Expanded(
-                child: DropdownButtonHideUnderline(
-                  child: DropdownButton<String>(
-                    value: value,
-                    isExpanded: true,
-                    dropdownColor: enabled ? Colors.white : bgColor,
-                    icon: Icon(
-                      Icons.keyboard_arrow_down,
-                      color: enabled ? Colors.black : textColor,
-                    ),
-                    items: items.map((item) {
-                      return DropdownMenuItem(
-                        value: item,
-                        child: Text(
-                          item,
-                          style: TextStyle(
-                            color: enabled ? Colors.black : textColor,
-                          ),
-                        ),
-                      );
-                    }).toList(),
-                    onChanged: enabled ? onChanged : null,
-                    hint: Text(
-                      hint,
-                      style: TextStyle(
-                        color: enabled
-                            ? Colors.black.withOpacity(0.5)
-                            : textColor.withOpacity(0.6),
+          child: DropdownButtonHideUnderline(
+            child: DropdownButton<String>(
+              value: value,
+              isExpanded: true,
+              dropdownColor: Colors.white,
+              items: items
+                  .map(
+                    (item) => DropdownMenuItem(
+                      value: item,
+                      child: Text(
+                        item,
+                        style: const TextStyle(color: Colors.black),
                       ),
                     ),
-                  ),
+                  )
+                  .toList(),
+              onChanged: enabled ? onChanged : null,
+              hint: Text(
+                hint,
+                style: TextStyle(
+                  color: enabled
+                      ? Colors.black.withOpacity(0.5)
+                      : Colors.white60,
                 ),
               ),
-            ],
+            ),
           ),
         ),
       ],
@@ -799,15 +754,7 @@ class CustomTextField extends StatelessWidget {
   final String? label;
   final int maxLines;
   final bool useGrayFill;
-  final TextInputType keyboard;
   final bool enabled;
-  final Widget? prefixIcon;
-  final Widget? suffixIcon;
-
-  static const Color bgColor = Color(0xFF2B2B2B);
-  static const Color textColor = Color(0xFFFAFAFA);
-  static const Color inputGrayFill60 = Color(0x996B6B6B);
-  static const Color blueButton = Color(0xFF3991D9);
 
   const CustomTextField({
     super.key,
@@ -816,10 +763,7 @@ class CustomTextField extends StatelessWidget {
     this.label,
     this.maxLines = 1,
     this.useGrayFill = false,
-    this.keyboard = TextInputType.text,
     this.enabled = true,
-    this.prefixIcon,
-    this.suffixIcon,
   });
 
   @override
@@ -828,48 +772,31 @@ class CustomTextField extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (label != null) ...[
-          Text(label!, style: TextStyle(color: textColor, fontSize: 14)),
+          Text(
+            label!,
+            style: const TextStyle(color: Color(0xFFFAFAFA), fontSize: 14),
+          ),
           const SizedBox(height: 8),
         ],
         TextField(
           controller: controller,
-          keyboardType: keyboard,
           maxLines: maxLines,
           enabled: enabled,
-          style: TextStyle(color: enabled ? Colors.black : textColor),
+          style: TextStyle(
+            color: enabled ? Colors.black : const Color(0xFFFAFAFA),
+          ),
           decoration: InputDecoration(
             filled: true,
-            fillColor: enabled ? Colors.white : bgColor,
+            fillColor: enabled ? Colors.white : const Color(0xFF2B2B2B),
             hintText: hint,
             hintStyle: TextStyle(
-              color: enabled
-                  ? Colors.black.withOpacity(0.5)
-                  : textColor.withOpacity(0.6),
+              color: enabled ? Colors.black.withOpacity(0.5) : Colors.white60,
             ),
-            prefixIcon: prefixIcon,
-            suffixIcon: suffixIcon,
             contentPadding: const EdgeInsets.symmetric(
               horizontal: 14,
               vertical: 12,
             ),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(
-                color: enabled ? Colors.grey.shade300 : inputGrayFill60,
-              ),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: Colors.grey.shade300),
-            ),
-            disabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: const BorderSide(color: inputGrayFill60),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: const BorderSide(color: blueButton, width: 1.5),
-            ),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
           ),
         ),
       ],

@@ -17,12 +17,38 @@ class _DashboardAdminPageState extends State<DashboardAdminPage> {
   final user = FirebaseAuth.instance.currentUser;
 
   Future<void> _handleLogout() async {
-    await FirebaseAuth.instance.signOut();
-    if (mounted) {
-      Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(builder: (context) => const LoginPage()),
-        (route) => false,
-      );
+    bool confirm =
+        await showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            backgroundColor: const Color(0xFF2B2B2B),
+            title: const Text("Keluar?", style: TextStyle(color: Colors.white)),
+            content: const Text(
+              "Yakin ingin keluar?",
+              style: TextStyle(color: Colors.white70),
+            ),
+            actions: [
+              TextButton(
+                child: const Text("Batal"),
+                onPressed: () => Navigator.pop(context, false),
+              ),
+              TextButton(
+                child: const Text("Ya", style: TextStyle(color: Colors.red)),
+                onPressed: () => Navigator.pop(context, true),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+
+    if (confirm) {
+      await FirebaseAuth.instance.signOut();
+      if (mounted) {
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (context) => const LoginPage()),
+          (route) => false,
+        );
+      }
     }
   }
 
@@ -74,7 +100,7 @@ class _DashboardAdminPageState extends State<DashboardAdminPage> {
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   const Text(
-                    "Antrian Terbaru",
+                    "Jadwal Terdekat",
                     style: TextStyle(
                       color: Colors.white,
                       fontSize: 18,
@@ -96,16 +122,37 @@ class _DashboardAdminPageState extends State<DashboardAdminPage> {
               ),
               const SizedBox(height: 16),
 
-              // 3. LIST ANTRIAN (Logic Diperbaiki)
+              // 3. LIST ANTRIAN (FILTERED & SORTED)
               StreamBuilder<QuerySnapshot>(
                 stream: FirebaseFirestore.instance
                     .collection('bookings')
-                    .orderBy('created_at', descending: true)
+                    // --- REVISI QUERY ---
+                    // 1. Hanya ambil yang statusnya AKTIF
+                    .where(
+                      'status',
+                      whereIn: ['Menunggu', 'Diterima', 'Diproses'],
+                    )
+                    // 2. Urutkan berdasarkan Waktu Terdekat (Pagi ke Sore)
+                    .orderBy('tanggal_booking', descending: false)
+                    .orderBy('jam_booking', descending: false)
                     .limit(3)
                     .snapshots(),
                 builder: (context, bookingSnap) {
                   if (bookingSnap.connectionState == ConnectionState.waiting) {
                     return const Center(child: CircularProgressIndicator());
+                  }
+
+                  // Error Handler (Buat Index)
+                  if (bookingSnap.hasError) {
+                    return Container(
+                      padding: const EdgeInsets.all(16),
+                      color: Colors.red.withOpacity(0.1),
+                      child: SelectableText(
+                        // Pakai Selectable biar bisa copas link kalau di emulator
+                        "Butuh Index Baru!\nCek Debug Console atau Logcat untuk link pembuatan index.\n\nError: ${bookingSnap.error}",
+                        style: const TextStyle(color: Colors.red, fontSize: 12),
+                      ),
+                    );
                   }
 
                   if (!bookingSnap.hasData || bookingSnap.data!.docs.isEmpty) {
@@ -117,7 +164,7 @@ class _DashboardAdminPageState extends State<DashboardAdminPage> {
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: const Text(
-                        "Belum ada antrian masuk.",
+                        "Tidak ada jadwal aktif saat ini.",
                         style: TextStyle(color: Colors.white54),
                         textAlign: TextAlign.center,
                       ),
@@ -126,19 +173,16 @@ class _DashboardAdminPageState extends State<DashboardAdminPage> {
 
                   var docs = bookingSnap.data!.docs;
 
-                  // Kita pakai .asMap() agar bisa dapat Index (0, 1, 2)
                   return Column(
                     children: docs.asMap().entries.map((entry) {
-                      int index = entry.key; // Ini urutan (0 = pertama)
+                      int index = entry.key;
                       var doc = entry.value;
                       var data = doc.data() as Map<String, dynamic>;
 
                       String nama = data['nama'] ?? 'Tanpa Nama';
                       String status = data['status'] ?? 'Menunggu';
-                      String jamManual =
-                          data['jam_booking'] ?? '00:00'; // Ambil string jam
+                      String jamManual = data['jam_booking'] ?? '00:00';
 
-                      // Format Tanggal SAJA (Tanpa Jam dari timestamp)
                       DateTime? tgl = data['tanggal_booking'] != null
                           ? (data['tanggal_booking'] as Timestamp).toDate()
                           : null;
@@ -147,12 +191,10 @@ class _DashboardAdminPageState extends State<DashboardAdminPage> {
                           ? DateFormat('d MMM', 'id_ID').format(tgl)
                           : '-';
 
-                      // Gabungkan Tanggal + Jam Manual
                       String finalDateDisplay =
                           "$dateOnly, $jamManual WIB • $status";
 
-                      // LOGIKA WARNA BARU:
-                      // Hanya index ke-0 (paling atas) yang Hijau. Sisanya Abu-abu.
+                      // HIGHLIGHT: Kartu paling atas = Hijau
                       bool isTopOne = (index == 0);
 
                       return Padding(
@@ -160,7 +202,7 @@ class _DashboardAdminPageState extends State<DashboardAdminPage> {
                         child: _buildQueueCard(
                           name: nama,
                           date: finalDateDisplay,
-                          isHighlight: isTopOne, // Kirim status highlight
+                          isHighlight: isTopOne,
                         ),
                       );
                     }).toList(),
@@ -199,17 +241,15 @@ class _DashboardAdminPageState extends State<DashboardAdminPage> {
     );
   }
 
-  // Widget Card (Diperbaiki logic warnanya)
   Widget _buildQueueCard({
     required String name,
     required String date,
-    required bool isHighlight, // Ganti parameter isActive jadi isHighlight
+    required bool isHighlight,
   }) {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        // Jika Highlight (urutan pertama) = Hijau, selain itu = Abu Gelap
         color: isHighlight ? const Color(0xFF4CAF50) : const Color(0xFF424242),
         borderRadius: BorderRadius.circular(8),
       ),
