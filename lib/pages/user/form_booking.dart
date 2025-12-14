@@ -25,7 +25,15 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
   String? selectedJenis;
   String? selectedMerk;
 
-  final List<String> kategoriList = ["KSG", "KSB", "Others"];
+  final List<String> kategoriList = [
+    "KSG",
+    "KSB",
+    "Servis Ringan / Tune Up",
+    "Ganti Oli",
+    "Ganti Sparepart (Ban/Kampas/dll)",
+    "Servis Besar / Turun Mesin",
+    "Lainnya",
+  ];
 
   // 1. Variabel Penampung Data Master (Mentah)
   List<Map<String, dynamic>> _masterDataKendaraan = [];
@@ -272,15 +280,6 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
                     fontSize: 24,
                     fontFamily: 'Nunito',
                   ),
-                ),
-                IconButton(
-                  icon: Icon(isFormEnabled ? Icons.lock_open : Icons.lock),
-                  color: textColor,
-                  onPressed: () {
-                    setState(() {
-                      isFormEnabled = !isFormEnabled;
-                    });
-                  },
                 ),
               ],
             ),
